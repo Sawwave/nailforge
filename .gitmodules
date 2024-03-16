@@ -1,0 +1,9 @@
+[submodule "AvxWindowFmIndex"]
+	path = AvxWindowFmIndex
+	url = https://github.com/TravisWheelerLab/AvxWindowFmIndex.git
+[submodule "argparse"]
+	path = argparse
+	url = https://github.com/p-ranav/argparse
+[submodule "P7HmmReader"]
+	path = P7HmmReader
+	url = https://github.com/TravisWheelerLab/P7HmmReader.git
