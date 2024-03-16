@@ -1,0 +1,17 @@
+CMakeCache.txt
+CPackConfig.cmake
+CPackSourceConfig.cmake
+cmake_install.cmake
+
+Makefile
+libc_library_files.a
+libNailFilter.a
+CMakeFiles/
+old/
+cmake-build-debug/
+build/
+.vscode/
+.idea/
+argparse/
+AvxWindowFmIndex/
+libnailforge.a
