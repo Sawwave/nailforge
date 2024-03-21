@@ -101,6 +101,11 @@ namespace NailForge {
             awFmDeallocIndex(fmIndex);
             std::cerr << "Failed to allocate memory for the hmm list" << std::endl;
             return ReturnCode::AllocationFailure;
+        case p7HmmFileNotFound:
+            fastaVectorDealloc(&fastaVector);
+            awFmDeallocIndex(fmIndex);
+            std::cerr << ".hmm file not found" << std::endl;
+            return ReturnCode::FileNotFound;
         }
 
         if (!allModelsInHmmListSameAlphabet(&phmmList)) {
@@ -143,11 +148,11 @@ namespace NailForge {
         complimentSeedList.resize(phmmList.count);
 
         uint64_t modelsCompleted = 0;
-        std::cout << "model " << 0 << " / " << phmmList.count << std::flush;
+        // std::cout << "model " << 0 << " / " << phmmList.count << std::endl;
 #pragma omp parallel for
         for (uint32_t modelIdx = 0; modelIdx < phmmList.count; modelIdx++) {
             const auto& phmm = phmmList.phmms[modelIdx];
-            std::vector<float> matchScores = PhmmProcessor::toFloatMatchScores(phmm);
+            std::vector<float> matchScores = NailForge::PhmmProcessor::toFloatMatchScores(phmm);
 
             if (searchType != NailForge::SearchType::ComplimentStrand) {
                 NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm, modelIdx,
@@ -158,12 +163,7 @@ namespace NailForge {
                     matchScores, complimentSeedList[modelIdx], params, true);
 
             }
-
-#pragma omp critical
-            {
-                modelsCompleted++;
-                std::cout << "\33[2K\rmodel " << modelsCompleted << " / " << phmmList.count << std::flush;
-            }
+            // std::cout << "model "<< modelIdx<< " / "<<phmmList.count<< std::endl;
         }
 
         fastaVectorDealloc(&fastaVector);
@@ -175,7 +175,7 @@ namespace NailForge {
 
 
 
-    std::string_view NailReturnCodeDescription(const NailForge::ReturnCode rc) {
+    std::string_view returnCodeDescription(const NailForge::ReturnCode rc) {
         switch (rc) {
         case ReturnCode::Success:           return "success";
         case ReturnCode::AllocationFailure: return "allocation failure";
