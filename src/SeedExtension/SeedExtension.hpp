@@ -7,7 +7,7 @@ namespace NailForge::SeedExtension {
 
     bool verifySeedViaExtension(const uint64_t localSequencePosition, const uint32_t modelPosition,
         const uint64_t sequenceIdx, const NailForge::SearchParams& searchParams, const bool isReverseCompliment,
-        const FastaVector& fastaVector, const P7Hmm& phmm);
+        const FastaVector& fastaVector, const P7Hmm& phmm, const std::vector<float> &phmmMatchScores);
 }
 
 #endif
