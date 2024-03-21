@@ -14,6 +14,7 @@ endif()
 
 add_library(nailforge STATIC        
     src/Alphabet/Alphabet.cpp
+    src/PhmmProcessor/PhmmProcessor.cpp
     src/Alphabet/LetterConversion.cpp
     src/SeedExtension/SeedExtension.cpp
     src/StringTree/StringTree.cpp
