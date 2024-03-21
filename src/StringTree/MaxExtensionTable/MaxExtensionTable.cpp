@@ -15,6 +15,10 @@ namespace NailForge::StringTree::Table {
         return maxScoreTable[(depth * this->modelLength) + modelPosition];
     }
 
+    float MaxExtensionTable::getMaxExtensionScore(const uint32_t modelPosition, const uint8_t extensionLength) noexcept {
+        return scoreAt(modelPosition, extensionLength);
+    }
+
     //this is in the header to make the compiler happier with the template argument.
     /**
      * Fills in the maximum extension table. At row i, col j of the table, the value contained is the maximum value attainable
