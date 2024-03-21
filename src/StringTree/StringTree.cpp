@@ -5,7 +5,8 @@
 #include <vector>
 
 namespace NailForge::StringTree {
-
+    int numSeeds = 0;
+    int verifiedSeeds = 0;
 
     struct StringTreeSparseScoreVectorEntry {
         StringTreeSparseScoreVectorEntry(const uint32_t modelPosition, const float score) :
@@ -22,12 +23,16 @@ namespace NailForge::StringTree {
 
     void verifyDiagonalsPassingThreshold(const AwFmIndex* const fmIndex, const StringTreeStackEntry& stackEntry,
         const uint32_t& thisSymbolModelPosition, const NailForge::SearchParams& params, const bool isReverseCompliment,
-        const FastaVector& fastaVector, const P7Hmm& phmm);
+        const FastaVector& fastaVector, const P7Hmm& phmm, const std::vector<float>& modelMatchScores, std::vector<AlignmentSeed>& seedList);
 
 
     void findSeeds(const AwFmIndex* const fmIndex, const FastaVector& fastaVector, const P7Hmm& phmm,
-        const uint32_t modelIdx, const std::vector<float>& matchScores, const std::vector<AlignmentSeed>& seedList,
+        const uint32_t modelIdx, const std::vector<float>& matchScores, std::vector<AlignmentSeed>& seedList,
         const NailForge::SearchParams& params, const bool isReverseComplimentSearch) {
+
+
+        numSeeds = 0;
+        verifiedSeeds = 0;
 
         const uint32_t nextDiagonalCellOffset = isReverseComplimentSearch ? 1 : -1;
         const uint8_t symbolEncodingComplimentBitmask = isReverseComplimentSearch ? 0x03 : 0x00;
@@ -51,7 +56,7 @@ namespace NailForge::StringTree {
         stack[0].symbol = 0;
         while (currentDepth >= 0) {
             const uint8_t maxExtensionPositionsRemaining = (params.maximumHitLength - 1) - currentDepth;
-            auto& currentSymbol = stack[currentDepth].symbol;
+            const auto& currentSymbol = stack[currentDepth].symbol;
             //character encoding is the character after complimenting (if doing reverse compliment search)
             const uint8_t phmmSymbolIdx = currentSymbol ^ symbolEncodingComplimentBitmask;
             stack[currentDepth].diagonalEntries.clear();
@@ -104,7 +109,8 @@ namespace NailForge::StringTree {
 
                         if (__builtin_expect(accumulatedScorePassesThreshold, false)) {
                             verifyDiagonalsPassingThreshold(fmIndex, stack[currentDepth], thisSymbolModelPosition,
-                                params, isReverseComplimentSearch, fastaVector, phmm);
+                                params, isReverseComplimentSearch, fastaVector, phmm, matchScores, seedList);
+
                         }
                         //if we didn't pass the threshold but if fully extended this kmer might, add it to the
                         //next layer diagonal list
@@ -124,20 +130,22 @@ namespace NailForge::StringTree {
             if (exploreFurtherDownTree) {
                 stack[++currentDepth].symbol = 0;
             }
-            else if (currentSymbol == alphabetSize - 1) {
-                currentSymbol = 0;
-                currentDepth--;
-            }
             else {
-                currentSymbol++;
+                while (stack[currentDepth].symbol == alphabetSize - 1 && currentDepth >= 0) {
+                    stack[currentDepth--].symbol = 0;
+                }
+                if (__builtin_expect(currentDepth >= 0, true)) {
+                    stack[currentDepth].symbol++;
+                }
             }
+
         }
+        // std::cout << "verified seeds: " << verifiedSeeds << " / " << numSeeds << std::endl;
     }
 
     void verifyDiagonalsPassingThreshold(const AwFmIndex* const fmIndex, const StringTreeStackEntry& stackEntry,
         const uint32_t& thisSymbolModelPosition, const NailForge::SearchParams& params, const bool isReverseCompliment,
-        const FastaVector& fastaVector, const P7Hmm& phmm) {
-
+        const FastaVector& fastaVector, const P7Hmm& phmm, const std::vector<float>& modelMatchScores, std::vector<AlignmentSeed>& seedList) {
         uint64_t searchRangeLength = awFmSearchRangeLength(&stackEntry.searchRange);
         //if there are way too many sequence hits, it's probably in some repetitive data, and we shouldn't report it.
         const float hitsPerMillionPositions = searchRangeLength / ((float)fastaVector.sequence.count / 1e6);
@@ -164,9 +172,14 @@ namespace NailForge::StringTree {
                 std::cout << "Error: could not resolve local sequence position from fm index" << std::endl;
             }
 
-            SeedExtension::verifySeedViaExtension(localSequencePosition,
-                thisSymbolModelPosition, sequenceIdx, params, isReverseCompliment, fastaVector, phmm);
+            bool seedIsVerified = SeedExtension::verifySeedViaExtension(localSequencePosition,
+                thisSymbolModelPosition, sequenceIdx, params, isReverseCompliment, fastaVector, phmm, modelMatchScores);
+            numSeeds++;
+            if (seedIsVerified) {
+                seedList.emplace_back(localSequencePosition, thisSymbolModelPosition, sequenceIdx);
+
+                verifiedSeeds++;
+            }
         }
     }
-
 }
