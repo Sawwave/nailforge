@@ -103,7 +103,7 @@ namespace NailForge {
     };
 
     // returns a text description of the return code.
-    std::string_view NailForgeReturnCodeDescription(const NailForge::ReturnCode rc);
+    std::string_view returnCodeDescription(const NailForge::ReturnCode rc);
 
     NailForge::ReturnCode createFmIndex(const char* fastaFileSrc, const char* fmIndexFileSrc,
         const NailForge::Alphabet& alphabet, const uint8_t suffixArrayCompressionRatio);
