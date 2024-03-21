@@ -2,12 +2,31 @@
 #include "../argparse/include/argparse/argparse.hpp"
 #include <cctype>
 #include <string>
+#include <cstring>
+#include <cstdio>
+#include <chrono>
+
+//Private function prototypes
+void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
+    NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
+    bool& checkBenchmarkSensitivity, bool& parsableBenchmark);
+
+void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc,
+    NailForge::Alphabet& alphabet, uint8_t& suffixArrayCompressionRatio);
+
+bool isPositiveExample(const P7Hmm& phmm, const FastaVector* fastaVector, const uint32_t sequenceIdx);
+
+bool isNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx);
+
+void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedLiset,
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark);
+
 
 int main(int argc, char** argv) {
+    argparse::ArgumentParser parser("nailforgeBenchmark");
 
-    argparse::ArgumentParser parser("benchmark");
-
-    argparse::ArgumentParser createCommand("createfm");
+    argparse::ArgumentParser createCommand("create");
     createCommand.add_description("create the fm index");
     createCommand.add_argument("-f", "--fasta").required().help("specifies the src for the fast file, for generating the awfm index file");
     createCommand.add_argument("-a", "--awFmIndex").required().help("specifies the src for the awfm index file, for either generating or using the index");
@@ -15,6 +34,7 @@ int main(int argc, char** argv) {
     createCommand.add_argument("-A", "--alphabet").required().help("specifies the alphabet for a fasta. values are d for dna, r for rna, a for amino");
 
     argparse::ArgumentParser searchCommand("search");
+    searchCommand.add_description("searches using a given hmm file and awfmi file");
     searchCommand.add_argument("-f", "--fasta").required().help("specifies the src for the fast file, for generating the awfm index file");
     searchCommand.add_argument("-a", "--awFmIndex").required().help("specifies the src for the awfm index file, for either generating or using the index");
     searchCommand.add_argument("-h", "--hmmFile").required().help("specifies the src for the hmm file, either for generating a model index or for searching");
@@ -23,7 +43,10 @@ int main(int argc, char** argv) {
     searchCommand.add_argument("-t", "--thresholdScore").required().help("sets the threshold score in bits for the main diagonal hits.");
     searchCommand.add_argument("-x", "--extensionScore").required().help("the score in bits to hit on the flanking extensions.");
     searchCommand.add_argument("-n", "--numThreads").help("sets the number of threads when openmp is used.");
-    searchCommand.arg_argument("-r", "--repeatFilterPartsPerMillion").required().help("float representing maximum number of awfm hits, "
+    searchCommand.add_argument("-b", "--benchmark").flag().help("benchmark the results for sensitivity");
+    searchCommand.add_argument("-B", "--benchmarkData").flag().help("show true positive, false positive results in a easy to parse format");
+
+    searchCommand.add_argument("-r", "--repeatFilterPartsPerMillion").required().help("float representing maximum number of awfm hits, "
         "in parts per million, before a hit is considered to be repetitive junk");
     searchCommand.add_argument("-T", "--searchType").required().required().help("search type to perform. \n"
         "'s' for standard (amino acid and single strand search),\n "
@@ -41,36 +64,45 @@ int main(int argc, char** argv) {
         std::cerr << parser;
         return 1;
     }
-
-    if (parser.present("createfm")) {
+    if (parser.is_subcommand_used(createCommand)) {
         std::string fastaSrc, awfmSrc;
         uint8_t suffixArrayCompressionRatio;
         NailForge::Alphabet alphabet;
 
-        parseCreateOptions(parser, fastaSrc, awfmiSrc, alphabet, suffixArrayCompressionRatio);
+        parseCreateOptions(createCommand, fastaSrc, awfmSrc, alphabet, suffixArrayCompressionRatio);
         std::cout << "Creating fm index..." << std::endl;
         NailForge::ReturnCode nfrc = NailForge::createFmIndex(fastaSrc.c_str(), awfmSrc.c_str(), alphabet, suffixArrayCompressionRatio);
 
         if (nfrc != NailForge::ReturnCode::Success) {
-            std::cerr << "create fm index returned error code " << nfrc << std::endl;
+            std::cerr << "create fm index returned error code " << NailForge::returnCodeDescription(nfrc) << std::endl;
             exit(-1);
         }
+        std::cout << "fm index creation finished" << std::endl;
     }
-    else if (parser.present("search")) {
+
+    else if (parser.is_subcommand_used(searchCommand)) {
         std::string fastaSrc, awfmSrc, hmmSrc;
         NailForge::SearchParams params;
         NailForge::SearchType searchType;
         uint8_t numThreads;
-        parseSearchOptions(parser, fastaSrc, awfmSrc, hmmSrc, params, numThreads, searchType);
+        bool checkBenchmarkSensitivity, parsableBenchmark;
+        parseSearchOptions(searchCommand, fastaSrc, awfmSrc, hmmSrc, params, searchType, numThreads, checkBenchmarkSensitivity, parsableBenchmark);
 
         std::vector<std::vector<NailForge::AlignmentSeed>> primarySeedList, complimentSeedList;
 
 
-        std::cout << "filtering with hmm..." << std::endl;
-        NailForge::ReturnCode nfrc = NailForge::filterWithHmmFile(hmmFileSrc, fastaSrc, awfmSrc,
+        // std::cout << "filtering with hmm..." << std::endl;
+        auto startTime = std::chrono::high_resolution_clock::now();
+        NailForge::ReturnCode nfrc = NailForge::filterWithHmmFile(hmmSrc.c_str(), fastaSrc.c_str(), awfmSrc.c_str(),
             params, searchType, numThreads, primarySeedList, complimentSeedList);
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+        const float secondsDuration = (float)duration.count() / 1000000.0f;
 
-        checkSensitivity(primarySeedList, complimentSeedList, hmmSrc, fastaSrc);
+        if (checkBenchmarkSensitivity || parsableBenchmark) {
+            checkSensitivity(primarySeedList, complimentSeedList, hmmSrc, fastaSrc, parsableBenchmark);
+        }
+        std::cout << "\t" << secondsDuration << std::endl;
 
     }
     else {
@@ -80,7 +112,8 @@ int main(int argc, char** argv) {
 }
 
 
-void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, NailForge::Alphabet& alphabet, uint8_t& suffixArrayCompressionRatio) {
+void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc,
+    NailForge::Alphabet& alphabet, uint8_t& suffixArrayCompressionRatio) {
     try {
         fastaSrc = parser.get<std::string>("-f");
     }
@@ -95,20 +128,21 @@ void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
         std::cerr << "could not get awfmi file src from parser" << std::endl;
         std::exit(-1);
     }
+    std::string alphabetStr;
     try {
-        std::string alphabetStr = parser.get<std::string>("-A");
+        alphabetStr = parser.get<std::string>("-A");
     }
     catch (const std::exception& e) {
         std::cerr << "could not get alphabet from parser" << std::endl;
         std::exit(-1);
     }
-    if (alphabetStr.size() == 0) {
+    if (alphabetStr.length() != 0) {
         switch (std::tolower(alphabetStr[0])) {
         case 'a': alphabet = NailForge::Alphabet::Amino;    break;
         case 'd': alphabet = NailForge::Alphabet::Dna;      break;
         case 'r': alphabet = NailForge::Alphabet::Rna;      break;
         default:
-            std::err << "Error, alphabet did not start with d, r, or a." << std::endl;
+            std::cerr << "Error, alphabet did not start with d, r, or a." << std::endl;
             exit(-1);
         }
     }
@@ -127,7 +161,8 @@ void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
 }
 
 void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
-    NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads) {
+    NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
+    bool& checkBenchmarkSensitivity, bool& parsableBenchmark) {
     try {
         fastaSrc = parser.get<std::string>("-f");
     }
@@ -150,57 +185,72 @@ void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
         std::exit(-1);
     }
     try {
-        params.maximumHitLength = parser.get<uint8_t>("-l");
+        params.maximumHitLength = (uint8_t)std::stoi(parser.get<std::string>("-l"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get main diag length from parser " << std::endl;
         exit(-1);
     }
     try {
-        params.flankExtensionLength = parser.get<uint8_t>("-e");
+        params.flankExtensionLength = (uint8_t)std::stoi(parser.get<std::string>("-e"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get extension diag length from parser " << std::endl;
         exit(-1);
     }
     try {
-        params.extensionThresholdScore = parser.get<float>("-t");
+        params.mainDiagonalThresholdScore = std::stof(parser.get<std::string>("-t"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get main diag threshold from parser " << std::endl;
         exit(-1);
     }
     try {
-        params.extensionThresholdScore = parser.get<float>("-x");
+        params.extensionThresholdScore = std::stof(parser.get<std::string>("-x"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get extension threshold from parser " << std::endl;
         exit(-1);
     }
     try {
-        params.maxSeqHitsPerMillion = parser.get<float>("-r");
+        params.maxSeqHitsPerMillion = std::stof(parser.get<std::string>("-r"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not parse max seq hits per million from parser" << std::endl;
         exit(-1);
     }
     try {
-        numThreads = parser.get<uint8_t>("-n");
+        numThreads = (uint8_t)std::stoi(parser.get<std::string>("-n"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get num threads from parser" << std::endl;
         exit(-1);
     }
     try {
+        checkBenchmarkSensitivity = parser["-b"] == true;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "could not get benchmark flag from parser" << std::endl;
+        exit(-1);
+    }
+    try {
+        parsableBenchmark = parser["-B"] == true;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "could not get parsable benchmark flag from parser" << std::endl;
+        exit(-1);
+    }
+    try {
         std::string searchTypeString = parser.get<std::string>("-T");
         switch (std::tolower(searchTypeString[0])) {
-        case "p": searchType = NailForge::SearchType::Standard;         break;
-        case "c": searchType = NailForge::SearchType::DualStrand;       break;
-        case "b": searchType = NailForge::SearchType::ComplimentStrand; break;
+        case 'p': searchType = NailForge::SearchType::Standard;         break;
+        case 's': searchType = NailForge::SearchType::Standard;         break;
+        case 'c': searchType = NailForge::SearchType::DualStrand;       break;
+        case 'b': searchType = NailForge::SearchType::ComplimentStrand; break;
         case 'd': searchType = NailForge::SearchType::ComplimentStrand; break;
         default:
             std::cerr << "search type was not primary, compliment, or dual-strand" << std::endl;
-            exit(-1)
+            exit(-1);
         }
     }
     catch (const std::exception& e) {
@@ -209,9 +259,158 @@ void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
     }
 }
 
+
+bool isPositiveExample(const P7Hmm& phmm, const FastaVector* fastaVector, const uint32_t sequenceIdx) {
+    size_t headerLen;
+    char* headerPtr;
+    fastaVectorGetHeader(fastaVector, sequenceIdx, &headerPtr, &headerLen);
+
+    char* modelName = phmm.header.name;
+    const auto nameLen = strlen(modelName);
+
+    if (headerLen < nameLen) {
+        return false;
+    }
+    const bool sequenceStartsWithModelName = strncmp(modelName, headerPtr, nameLen) == 0;
+    if (sequenceStartsWithModelName) {
+        if (headerLen > nameLen) {
+            return headerPtr[nameLen] == '/';
+        }
+        else {
+            return true;
+        }
+    }
+    else {
+        return false;
+    }
+
+}
+
+bool isNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx) {
+    size_t headerLen;
+    char* headerPtr;
+    fastaVectorGetHeader(fastaVector, sequenceIdx, &headerPtr, &headerLen);
+
+    if (headerPtr == NULL) {
+        std::cerr << "Error: could not get header from sequence idx " << sequenceIdx << "." << std::endl;
+        exit(-1);
+    }
+
+    const auto nameLen = strlen("decoy");
+    return strncmp("decoy", headerPtr, nameLen) == 0;
+}
+
 void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
     const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedLiset,
-    const std::string& hmmFileSrc, const std::string& fastaFileSrc) {
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark) {
+    uint64_t numPositiveExamples = 0;
+    uint64_t numNegativeExample = 0;
+    uint64_t numPrimaryTruePositives = 0;
+    uint64_t numPrimaryFalsePositives = 0;
+    uint64_t numComplimentTruePositives = 0;
+    uint64_t numComplimentFalsePositives = 0;
+
+    uint64_t numSeeds = 0;
+    for (const auto& list : primarySeedList) {
+        numSeeds += list.size();
+    }
+    // std::cout << "primary seeds: " << numSeeds << std::endl;
+
+    FastaVector fastaVector;
+    FastaVectorReturnCode fvrc = fastaVectorInit(&fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not init fasta vector in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    fvrc = fastaVectorReadFasta(fastaFileSrc.c_str(), &fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not read fasta in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    P7HmmList phmmList;
+    P7HmmReturnCode phrc = readP7Hmm(hmmFileSrc.c_str(), &phmmList);
+    if (phrc != p7HmmSuccess) {
+        std::cerr << "Error: could not read phmm file in sensitivity check" << std::endl;
+        exit(-1);
+    }
 
 
+
+    //count the positive and negative examples
+    // std::cout << "phmm list count: " << phmmList.count;
+    for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+        for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
+            if (isPositiveExample(phmmList.phmms[modelIdx], &fastaVector, sequenceIdx)) {
+                numPositiveExamples++;
+            }
+            else if (isNegativeExample(&fastaVector, sequenceIdx)) {
+                numNegativeExample++;
+            }
+        }
+    }
+
+
+    //count the true positives and false positives in the returned seed lists
+    for (uint32_t modelIdx = 0;modelIdx < primarySeedList.size(); modelIdx++) {
+        std::vector<bool> hasSeenSequence;
+        hasSeenSequence.resize(fastaVector.metadata.count);
+        std::fill(hasSeenSequence.begin(), hasSeenSequence.end(), false);
+
+        for (const auto& seed : primarySeedList[modelIdx]) {
+            if (isPositiveExample(phmmList.phmms[modelIdx], &fastaVector, seed.sequenceIdx)) {
+                if (!hasSeenSequence[seed.sequenceIdx]) {
+                    numPrimaryTruePositives++;
+                    hasSeenSequence[seed.sequenceIdx] = true;
+                }
+            }
+            else if (isNegativeExample(&fastaVector, seed.sequenceIdx)) {
+                if (!hasSeenSequence[seed.sequenceIdx]) {
+                    numPrimaryFalsePositives++;
+                    hasSeenSequence[seed.sequenceIdx] = true;
+                }
+            }
+        }
+
+        std::fill(hasSeenSequence.begin(), hasSeenSequence.end(), false);
+        for (const auto& seed : complimentSeedLiset[modelIdx]) {
+            if (isPositiveExample(phmmList.phmms[modelIdx], &fastaVector, seed.sequenceIdx)) {
+                if (!hasSeenSequence[seed.sequenceIdx]) {
+                    numComplimentTruePositives++;
+                    hasSeenSequence[seed.sequenceIdx] = true;
+                }
+            }
+            else if (isNegativeExample(&fastaVector, seed.sequenceIdx)) {
+                if (!hasSeenSequence[seed.sequenceIdx]) {
+                    numComplimentFalsePositives++;
+                    hasSeenSequence[seed.sequenceIdx] = true;
+                }
+            }
+        }
+    }
+
+
+    if (parsableBenchmark) {
+        const float primaryTruePositiveRate = (float)numPrimaryTruePositives / (float)numPositiveExamples;
+        const float primaryFalsePositiveRate = (float)numPrimaryFalsePositives / (float)numNegativeExample;
+        const float complimentTruePositiveRate = (float)numComplimentTruePositives / (float)numPositiveExamples;
+        const float complimentFalsePositiveRate = (float)numComplimentFalsePositives / (float)numNegativeExample;
+        std::cout << primaryTruePositiveRate << "\t" << primaryFalsePositiveRate << "\t" << complimentTruePositiveRate <<
+            "\t" << complimentFalsePositiveRate;
+    }
+    else {
+        const float primaryTruePositiveRate = 100.0f * (float)numPrimaryTruePositives / (float)numPositiveExamples;
+        const float primaryFalsePositiveRate = 100.0f * (float)numPrimaryFalsePositives / (float)numNegativeExample;
+        const float complimentTruePositiveRate = 100.0f * (float)numComplimentTruePositives / (float)numPositiveExamples;
+        const float complimentFalsePositiveRate = 100.0f * (float)numComplimentFalsePositives / (float)numNegativeExample;
+        std::cout << "Primary TP " << numPrimaryTruePositives << " / " << numPositiveExamples <<
+            " (" << primaryTruePositiveRate << "%),\tFP " << numPrimaryFalsePositives << " / " << numNegativeExample <<
+            " (" << primaryFalsePositiveRate << "%)\n\tCompliment TP " << numComplimentTruePositives << " / " << numPositiveExamples <<
+            " (" << complimentTruePositiveRate << "%),\tFP" << numComplimentFalsePositives << " / " << numNegativeExample <<
+            " (" << complimentFalsePositiveRate << "%)";
+    }
+
+
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);
 }
