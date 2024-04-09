@@ -94,29 +94,4 @@ namespace NailForge::LetterConversion {
             std::swap(*firstChar, *secondChar);
         }
     }
-
-
-    std::string letterIndexVectorToString(const std::vector<uint8_t> letterIndexVector, const NailForge::Alphabet alphabet) noexcept {
-        std::string s;
-        for (const auto& letterIndex : letterIndexVector) {
-            s.push_back(letterIndexToAscii(letterIndex, alphabet));
-        }
-        return s;
-    }
-
-    template <uint8_t arrayLen>
-    void rrayToCstr(char* to, std::array<uint8_t, arrayLen> fromArray) noexcept {
-        for (uint8_t i = 0; i < arrayLen; i++) {
-            to[i] = letterIndexToAscii(fromArray[i]);
-        }
-    }
-
-    template <uint8_t arrayLen>
-    void arrayToReverseComplimentCstr(char* to,
-        std::array<uint8_t, arrayLen> fromArray) noexcept {
-        for (uint8_t i = 0; i < arrayLen; i++) {
-            to[i] = letterIndexToComplimentAscii(fromArray[arrayLen - i - 1]);
-        }
-    }
-
 }

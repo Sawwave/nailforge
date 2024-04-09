@@ -20,14 +20,6 @@ namespace NailForge::LetterConversion {
 
     void reverseComplimentCstr(char* cString, const uint32_t stringLength)noexcept;
 
-    std::string letterIndexVectorToString(const std::vector<uint8_t> letterIndexVector, const NailForge::Alphabet alphabet)noexcept;
-
-    template <uint8_t arrayLen>
-    void arrayToCstr(char* to, std::array<uint8_t, arrayLen> fromArray)noexcept;
-
-    template <uint8_t arrayLen>
-    void arrayToReverseComplimentCstr(char* to,
-        std::array<uint8_t, arrayLen> fromArray)noexcept;
 }
 
 #endif
