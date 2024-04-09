@@ -34,6 +34,9 @@ namespace NailForge {
         enum AwFmReturnCode awfmRc = awFmCreateIndexFromFasta(&fmIndex,
             &awfmConfig, fastaFileSrc, fmIndexFileSrc);
 
+
+        awFmDeallocIndex(fmIndex);
+
         switch (awfmRc) {
         case AwFmFileWriteOkay:                 return ReturnCode::Success;
         case AwFmSuccess:                       return ReturnCode::Success;
