@@ -20,8 +20,11 @@ namespace NailForge::PhmmProcessor {
     //  std::vector<int32_t> to32BitMatchScores(const P7Hmm* phmm);
     //  std::vector<int32_t> toProjected32BitMatchScores(const P7Hmm* phmm, const float pValue);
 
-    //finds a phmm's threshold value for a given p-value
-    float findThreshold(const P7Hmm& phmm, const float pValue);
+    //finds a phmm's threshold value for a given p-value using the model's MAXL field
+    float findThresholdForNucleotide(const P7Hmm& phmm, const float pValue);
+
+    //find a phmm's threshold value for a given p-value using the target sequence length
+    float findThresholdForAmino(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue);
 
     //The inverse gumbel survival function, aka, what score is needed to hit the given p-value?
     float gumbelInverseSurvival(const float lambda, const float mu, const float pValue);

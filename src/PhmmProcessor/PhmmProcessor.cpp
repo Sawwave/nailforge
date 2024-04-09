@@ -101,14 +101,13 @@ namespace NailForge::PhmmProcessor {
         const uint64_t numMatchScore = PhmmProcessor::getNumMatchScores(phmm);
 
         std::vector<float> projectedScores;
-        projectedScores.reserve(numMatchScore);
-
+        projectedScores.resize(numMatchScore);
         if (isAminoAlphabet) {
             for (uint32_t scoreIndex = 0; scoreIndex < numMatchScore; scoreIndex++) {
                 const float negLogScore = phmm.model.matchEmissionScores[scoreIndex];
                 const float background = log2InverseAminoBackgroundDistribution[scoreIndex % 20];
                 const float projectedScore = background - (negLogScore * NAIL_NAT_LOG_2_E);
-                projectedScores.push_back(projectedScore);
+                projectedScores[scoreIndex] = projectedScore;
             }
         }
         else {
@@ -116,7 +115,7 @@ namespace NailForge::PhmmProcessor {
                 const float negLogScore = phmm.model.matchEmissionScores[scoreIndex];
                 const float background = 2.0f; //DNA or RNA, here log2(1/(1/4)) =log2(4) = 2
                 const float projectedScore = background - (negLogScore * NAIL_NAT_LOG_2_E);
-                projectedScores.push_back(projectedScore);
+                projectedScores[scoreIndex] = projectedScore;
             }
         }
 
@@ -124,16 +123,12 @@ namespace NailForge::PhmmProcessor {
     }
 
 
-    float findThreshold(const P7Hmm& phmm, const float pValue) {
-
-        std::cout << "NOTICE: This function is currently Deprecated. It cannot function for Amino Acid searching. "
-            << "ignoring threshold computation, using hard-coded value of 15" << std::endl;
-        return 15.0f;
+    float findThresholdForNucleotide(const P7Hmm& phmm, const float pValue) {
 
         const float mu = phmm.stats.msvGumbelMu;
         const float lambda = phmm.stats.msvGumbelLambda;
-        const float maxLength = phmm.header.maxLength;
-        const float modelLength = phmm.header.modelLength;
+        const float maxLength = static_cast<float>(phmm.header.maxLength);
+        const float modelLength = static_cast<float>(phmm.header.modelLength);
 
         //given the probability of survival, give me the score. what score gives the p value?
         //what score do we need to hit the required p value? this value is for the full model. 
@@ -160,8 +155,39 @@ namespace NailForge::PhmmProcessor {
         return thresholdScoreInBits;
     }
 
+    float findThresholdForAmino(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue) {
+        const float mu = phmm.stats.msvGumbelMu;
+        const float lambda = phmm.stats.msvGumbelLambda;
+        const float modelLength = phmm.header.modelLength;
+        const float floatSeqLength = static_cast<float>(sequenceLength);
+
+        //given the probability of survival, give me the score. what score gives the p value?
+        //what score do we need to hit the required p value? this value is for the full model. 
+        float scoreRequiredForFullModelPvalue = PhmmProcessor::gumbelInverseSurvival(lambda, mu, pValue); //inverse survival (gumbel distribution)
+        //we're only working with the single-hit model, so we need to add some penalties to make the probabilities match.
+        float nStateLoopPenalty = logf(floatSeqLength / (floatSeqLength + 3));  //probablility of staying in the n state (or c state), looping.
+        float nStateLoopPenaltyTotal = nStateLoopPenalty * floatSeqLength;  //total length penalty for the max sequence length
+        float nStateEscapePenalty = logf(3.0f / (floatSeqLength + 3));  //penalty for escaping the n or c states (increases by 1 every time seq len doubles)
+        float bStateToAnyMStatePenalty = logf(2.0f / (modelLength * (modelLength + 1)));  //penalty for transition from b to kth 'm' option (msubk)
+        float transitionEToC = logf(1.0f / 2);
+        float coreModelAdjustment = (nStateEscapePenalty + nStateLoopPenaltyTotal +
+            nStateEscapePenalty + bStateToAnyMStatePenalty + transitionEToC);
+
+        float backgroundLoopProbability = floatSeqLength / (floatSeqLength + 1); //background loop probability
+        float backgroundLoopPenaltyTotal = floatSeqLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
+        float backgroundMovePenalty = log(1.0 - backgroundLoopProbability);
+        float backgroundScore = backgroundLoopPenaltyTotal + backgroundMovePenalty;
+
+        float thresholdScoreInNats =
+            (scoreRequiredForFullModelPvalue * NAIL_NAT_LOG_2) + backgroundScore - coreModelAdjustment;
+        // that's in nats; let's shift to bits
+        float thresholdScoreInBits = thresholdScoreInNats / NAIL_NAT_LOG_2;
+
+        return thresholdScoreInBits;
+    }
+
     float findTauScalingFactor(const P7Hmm& phmm, const float pValue, const float projectedThreshold) {
-        float thresholdScoreInBits = PhmmProcessor::findThreshold(phmm, pValue);
+        float thresholdScoreInBits = PhmmProcessor::findThresholdForNucleotide(phmm, pValue);
         float scaleFactor = projectedThreshold / thresholdScoreInBits; //a hit should be triggered if a cell hits 256 (causes an 8-bit int overflow)
 
         return scaleFactor;
