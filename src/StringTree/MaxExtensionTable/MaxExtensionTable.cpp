@@ -94,26 +94,18 @@ namespace NailForge::StringTree::Table {
             }
 
             for (uint8_t tableDepth = 2; tableDepth < this->depth; tableDepth++) {
-                //As the cells represent the max score from extending UP TO that many positions, we just copy
-                //the score from the cell extending one less than what we already have for the cells
-                //that would leave the bounds of the model
-                for (uint32_t modelPosition = 0; modelPosition < tableDepth;modelPosition++) {
-                    scoreAt(modelPosition, tableDepth) = scoreAt(modelPosition, tableDepth - 1);
-                }
-
-
-                for (uint32_t modelPosition = tableDepth; modelPosition < modelLength; modelPosition++) {
-                    scoreAt(modelPosition, tableDepth) =                //this score equals
-                        scoreAt(modelPosition, tableDepth - 1) +        //best score from extending it one less than we need
-                        scoreAt(modelPosition - (tableDepth - 1), 1);     //plus the final letter extension
-                    //this final extension is found by walking diagonally back down the table until the 1st extension row
+                for (uint32_t modelPosition = 0; modelPosition < modelLength; modelPosition++) {
+                    if (tableDepth > modelPosition) {
+                        scoreAt(modelPosition, tableDepth) = scoreAt(modelPosition, tableDepth - 1);
+                    }
+                    else {
+                        scoreAt(modelPosition, tableDepth) =                //this score equals
+                            scoreAt(modelPosition, tableDepth - 1) +        //best score from extending it one less than we need
+                            scoreAt(modelPosition - (tableDepth - 1), 1);     //plus the final letter extension
+                        //this final extension is found by walking diagonally back down the table until the 1st extension row
+                    }
                 }
             }
         }
     }
-
-
-
-
-
 }
