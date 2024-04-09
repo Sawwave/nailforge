@@ -26,25 +26,28 @@ namespace NailForge {
 
     struct SearchParams {
         float mainDiagonalThresholdScore;
-        float extensionThresholdScore;
+        float extensionPValue;
         float maxSeqHitsPerMillion;
         uint8_t maximumHitLength;
         uint8_t flankExtensionLength;
+        uint8_t extentionGroupWidth;
         static SearchParams defaultParams(const NailForge::Alphabet alphabet) {
             SearchParams searchParams;
             if (alphabet == NailForge::Alphabet::Amino) {
                 searchParams.mainDiagonalThresholdScore = 10;
-                searchParams.extensionThresholdScore = 8;
+                searchParams.extensionPValue = 0.001;
                 searchParams.maximumHitLength = 5;
                 searchParams.maxSeqHitsPerMillion = 100;
                 searchParams.flankExtensionLength = 8;
+                searchParams.extentionGroupWidth = 9;
             }
             else {
                 searchParams.mainDiagonalThresholdScore = 14;
-                searchParams.extensionThresholdScore = 12;
+                searchParams.extensionPValue = 0.001;
                 searchParams.maximumHitLength = 15;
                 searchParams.maxSeqHitsPerMillion = 100;
                 searchParams.flankExtensionLength = 16;
+                searchParams.extentionGroupWidth = 9;
             }
             return searchParams;
         }
