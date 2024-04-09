@@ -7,12 +7,8 @@
 
 namespace NailForge::PhmmProcessor {
 
-
 #define NAIL_NAT_LOG_2 0.69314718055994529
-#define NAIL_NAT_LOG_ONE_FOURTH -1.3862943611198906
 #define NAIL_NAT_LOG_2_E 1.4426950408889634073599246
-
-
 
     float log2InverseAminoBackgroundDistribution[20] = {
         //these values represnt log2(1/b), where b is 
@@ -38,62 +34,6 @@ namespace NailForge::PhmmProcessor {
         6.4531149215,   //W
         5.0391538251,   //Y
     };
-
-    std::vector<int8_t> to8BitMatchScores(const P7Hmm& phmm) {
-        const float LOG2_E = 1.44269504089;
-        const float constantAlpha = 2;
-        const float constantBeta = LOG2_E;
-
-        uint64_t numMatchScore = PhmmProcessor::getNumMatchScores(phmm);
-
-        std::vector<int8_t> projectedScores;
-        projectedScores.reserve(numMatchScore);
-        for (uint32_t scoreIndex = 0; scoreIndex < numMatchScore; scoreIndex++) {
-            float negLogScore = phmm.model.matchEmissionScores[scoreIndex];
-            float projectedScore = constantAlpha - (negLogScore * constantBeta);
-
-            if (__builtin_expect(projectedScore < SCHAR_MIN, 0)) {
-                projectedScore = SCHAR_MIN;
-            }
-            else if (__builtin_expect(projectedScore > SCHAR_MAX, 0)) {
-                projectedScore = SCHAR_MAX;
-            }
-            projectedScores.push_back((int8_t)projectedScore);
-        }
-
-        return projectedScores;
-    }
-
-
-    std::vector<int8_t> toProjected8BitMatchScores(const P7Hmm& phmm, const float pValue, const float thresholdHitValue) {
-        const float scoreMultiplier = PhmmProcessor::findTauScalingFactor(phmm, pValue, thresholdHitValue);
-        const float LOG2_E = 1.44269504089;
-        const float constantAlpha = 2 * scoreMultiplier;
-        const float constantBeta = LOG2_E * scoreMultiplier;
-
-
-        uint64_t numMatchScore = PhmmProcessor::getNumMatchScores(phmm);
-
-        std::vector<int8_t> projectedScores;
-        projectedScores.reserve(numMatchScore);
-        for (uint32_t scoreIndex = 0; scoreIndex < numMatchScore; scoreIndex++) {
-            float negLogScore = phmm.model.matchEmissionScores[scoreIndex];
-            float projectedScore = constantAlpha - (negLogScore * constantBeta);
-
-            if (__builtin_expect(projectedScore < SCHAR_MIN, 0)) {
-                projectedScore = SCHAR_MIN;
-            }
-            else if (__builtin_expect(projectedScore > SCHAR_MAX, 0)) {
-                projectedScore = SCHAR_MAX;
-            }
-            projectedScores.push_back((int8_t)projectedScore);
-
-        }
-
-        return projectedScores;
-    }
-
-
 
     std::vector<float> toFloatMatchScores(const P7Hmm& phmm) {
         const bool isAminoAlphabet = phmm.header.alphabet == P7HmmReaderAlphabetAmino;
@@ -186,13 +126,6 @@ namespace NailForge::PhmmProcessor {
         return thresholdScoreInBits;
     }
 
-    float findTauScalingFactor(const P7Hmm& phmm, const float pValue, const float projectedThreshold) {
-        float thresholdScoreInBits = PhmmProcessor::findThresholdForNucleotide(phmm, pValue);
-        float scaleFactor = projectedThreshold / thresholdScoreInBits; //a hit should be triggered if a cell hits 256 (causes an 8-bit int overflow)
-
-        return scaleFactor;
-    }
-
     float gumbelInverseSurvival(const float lambda, const float mu, const float pValue) {
         /* The real calculation is mu - ( log(-1. * log(1-p)) / lambda).
         *  But there's a problem with small p:
@@ -202,8 +135,6 @@ namespace NailForge::PhmmProcessor {
         *    (1) log( 1-p) ~= -p   for small p (e.g. p<0.001)
         *      so log(-1. * log(1-p)) ~= log(p)
         *    (2) log (p) ~= (p^p - 1) / p
-        *
-        *    See notes Mar 1, 2010.
         */
 
         const float NAIL_GUMBEL_EPSILON = 5e-9;
@@ -228,6 +159,4 @@ namespace NailForge::PhmmProcessor {
 
         return alphabetCardinality * phmm.header.modelLength;
     }
-
-
 }
