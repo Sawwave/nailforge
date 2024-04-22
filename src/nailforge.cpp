@@ -16,8 +16,6 @@ namespace NailForge {
         awfmConfig.keepSuffixArrayInMemory = true;
         awfmConfig.storeOriginalSequence = false;
 
-
-
         if (alphabet == Alphabet::Dna) {
             awfmConfig.kmerLengthInSeedTable = 12;  //16*4^12 = 268MB
             awfmConfig.alphabetType = AwFmAlphabetDna;
@@ -58,7 +56,6 @@ namespace NailForge {
         omp_set_num_threads(numThreads);
 
         //load the fm index
-
         AwFmIndex* fmIndex;
         FastaVector fastaVector;
         P7HmmList phmmList;
@@ -146,11 +143,10 @@ namespace NailForge {
             return ReturnCode::GeneralFailure;
         }
 
-        NailForge::Alphabet alphabet;
         switch (phmmList.phmms[0].header.alphabet) {
-        case P7HmmReaderAlphabetAmino:  alphabet = NailForge::Alphabet::Amino;  break;
-        case P7HmmReaderAlphabetDna:    alphabet = NailForge::Alphabet::Dna;    break;
-        case P7HmmReaderAlphabetRna:    alphabet = NailForge::Alphabet::Rna;    break;
+        case P7HmmReaderAlphabetAmino:
+        case P7HmmReaderAlphabetDna:
+        case P7HmmReaderAlphabetRna: break;
         default:    std::cerr << "error: hmm file alphabet not supported. only Amino, Rna, and Dna are supported." << std::endl;
             fastaVectorDealloc(&fastaVector);
             awFmDeallocIndex(fmIndex);
@@ -169,23 +165,20 @@ namespace NailForge {
         primarySeedList.resize(phmmList.count);
         complimentSeedList.resize(phmmList.count);
 
-        uint64_t modelsCompleted = 0;
-        // std::cout << "model " << 0 << " / " << phmmList.count << std::endl;
 #pragma omp parallel for
         for (uint32_t modelIdx = 0; modelIdx < phmmList.count; modelIdx++) {
             const auto& phmm = phmmList.phmms[modelIdx];
             std::vector<float> matchScores = NailForge::PhmmProcessor::toFloatMatchScores(phmm);
 
             if (searchType != NailForge::SearchType::ComplimentStrand) {
-                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm, modelIdx,
+                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm,
                     matchScores, primarySeedList[modelIdx], params, false);
             }
             if (searchType != NailForge::SearchType::Standard) {
-                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm, modelIdx,
+                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm,
                     matchScores, complimentSeedList[modelIdx], params, true);
 
             }
-            // std::cout << "model "<< modelIdx<< " / "<<phmmList.count<< std::endl;
         }
 
         fastaVectorDealloc(&fastaVector);
@@ -193,9 +186,6 @@ namespace NailForge {
         p7HmmListDealloc(&phmmList);
         return NailForge::ReturnCode::Success;
     }
-
-
-
 
     std::string_view returnCodeDescription(const NailForge::ReturnCode rc) {
         switch (rc) {
