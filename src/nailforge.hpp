@@ -30,7 +30,6 @@ namespace NailForge {
         float maxSeqHitsPerMillion;
         uint8_t maximumHitLength;
         uint8_t flankExtensionLength;
-        uint8_t extentionGroupWidth;
         static SearchParams defaultParams(const NailForge::Alphabet alphabet) {
             SearchParams searchParams;
             if (alphabet == NailForge::Alphabet::Amino) {
@@ -39,7 +38,6 @@ namespace NailForge {
                 searchParams.maximumHitLength = 5;
                 searchParams.maxSeqHitsPerMillion = 100;
                 searchParams.flankExtensionLength = 8;
-                searchParams.extentionGroupWidth = 9;
             }
             else {
                 searchParams.mainDiagonalThresholdScore = 14;
@@ -47,7 +45,6 @@ namespace NailForge {
                 searchParams.maximumHitLength = 15;
                 searchParams.maxSeqHitsPerMillion = 100;
                 searchParams.flankExtensionLength = 16;
-                searchParams.extentionGroupWidth = 9;
             }
             return searchParams;
         }
