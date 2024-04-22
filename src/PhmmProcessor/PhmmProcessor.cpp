@@ -7,8 +7,9 @@
 
 namespace NailForge::PhmmProcessor {
 
-#define NAIL_NAT_LOG_2 0.69314718055994529
-#define NAIL_NAT_LOG_2_E 1.4426950408889634073599246
+#define NAIL_NAT_LOG_2 0.69314718055994529f
+#define NAIL_NAT_LOG_ONE_HALF -0.69314718055994529f
+#define NAIL_NAT_LOG_2_E 1.4426950408889634073599246f
 
     float log2InverseAminoBackgroundDistribution[20] = {
         //these values represnt log2(1/b), where b is 
@@ -37,7 +38,6 @@ namespace NailForge::PhmmProcessor {
 
     std::vector<float> toFloatMatchScores(const P7Hmm& phmm) {
         const bool isAminoAlphabet = phmm.header.alphabet == P7HmmReaderAlphabetAmino;
-        const float constantAlpha = isAminoAlphabet ? std::log2(20) : 2;
         const uint64_t numMatchScore = PhmmProcessor::getNumMatchScores(phmm);
 
         std::vector<float> projectedScores;
@@ -63,62 +63,34 @@ namespace NailForge::PhmmProcessor {
     }
 
 
-    float findThresholdForNucleotide(const P7Hmm& phmm, const float pValue) {
-
-        const float mu = phmm.stats.msvGumbelMu;
-        const float lambda = phmm.stats.msvGumbelLambda;
-        const float maxLength = static_cast<float>(phmm.header.maxLength);
-        const float modelLength = static_cast<float>(phmm.header.modelLength);
-
-        //given the probability of survival, give me the score. what score gives the p value?
-        //what score do we need to hit the required p value? this value is for the full model. 
-        float scoreRequiredForFullModelPvalue = PhmmProcessor::gumbelInverseSurvival(lambda, mu, pValue); //inverse survival (gumbel distribution)
-        //we're only working with the single-hit model, so we need to add some penalties to make the probabilities match.
-        float nStateLoopPenalty = logf(maxLength / (maxLength + 3));  //probablility of staying in the n state (or c state), looping.
-        float nStateLoopPenaltyTotal = nStateLoopPenalty * maxLength;  //total length penalty for the max sequence length
-        float nStateEscapePenalty = logf(3.0f / (maxLength + 3));  //penalty for escaping the n or c states (increases by 1 every time seq len doubles)
-        float bStateToAnyMStatePenalty = logf(2.0f / (modelLength * (modelLength + 1)));  //penalty for transition from b to kth 'm' option (msubk)
-        float transitionEToC = logf(1.0f / 2);
-        float coreModelAdjustment = (nStateEscapePenalty + nStateLoopPenaltyTotal +
-            nStateEscapePenalty + bStateToAnyMStatePenalty + transitionEToC);
-
-        float backgroundLoopProbability = maxLength / (maxLength + 1); //background loop probability
-        float backgroundLoopPenaltyTotal = maxLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
-        float backgroundMovePenalty = log(1.0 - backgroundLoopProbability);
-        float backgroundScore = backgroundLoopPenaltyTotal + backgroundMovePenalty;
-
-        float thresholdScoreInNats =
-            (scoreRequiredForFullModelPvalue * NAIL_NAT_LOG_2) + backgroundScore - coreModelAdjustment;
-        // that's in nats; let's shift to bits
-        float thresholdScoreInBits = thresholdScoreInNats / NAIL_NAT_LOG_2;
-
-        return thresholdScoreInBits;
-    }
-
-    float findThresholdForAmino(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue) {
+    float findThreshold(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue) {
         const float mu = phmm.stats.msvGumbelMu;
         const float lambda = phmm.stats.msvGumbelLambda;
         const float modelLength = phmm.header.modelLength;
-        const float floatSeqLength = static_cast<float>(sequenceLength);
+        //if the MAX is missing, we'll just use the sequence length here
+        const float floatSeqLength = phmm.header.maxLength != 0 ?
+            phmm.header.maxLength : sequenceLength;
 
         //given the probability of survival, give me the score. what score gives the p value?
         //what score do we need to hit the required p value? this value is for the full model. 
-        float scoreRequiredForFullModelPvalue = PhmmProcessor::gumbelInverseSurvival(lambda, mu, pValue); //inverse survival (gumbel distribution)
+        const float scoreRequiredForFullModelPvalue = PhmmProcessor::gumbelInverseSurvival(lambda, mu, pValue); //inverse survival (gumbel distribution)
         //we're only working with the single-hit model, so we need to add some penalties to make the probabilities match.
-        float nStateLoopPenalty = logf(floatSeqLength / (floatSeqLength + 3));  //probablility of staying in the n state (or c state), looping.
-        float nStateLoopPenaltyTotal = nStateLoopPenalty * floatSeqLength;  //total length penalty for the max sequence length
-        float nStateEscapePenalty = logf(3.0f / (floatSeqLength + 3));  //penalty for escaping the n or c states (increases by 1 every time seq len doubles)
-        float bStateToAnyMStatePenalty = logf(2.0f / (modelLength * (modelLength + 1)));  //penalty for transition from b to kth 'm' option (msubk)
-        float transitionEToC = logf(1.0f / 2);
-        float coreModelAdjustment = (nStateEscapePenalty + nStateLoopPenaltyTotal +
+        //finds the probablility of staying in the n state (or c state), looping, summed for all positions in the target
+        const float lengthWithAdditionalStates = floatSeqLength + 3.0f;
+        const float nStateLoopPenaltyTotal = (floatSeqLength * floatSeqLength) / (lengthWithAdditionalStates);
+        const float nStateEscapePenalty = logf(3.0f / lengthWithAdditionalStates);  //penalty for escaping the n or c states (increases by 1 every time seq len doubles)
+        const float bStateToAnyMStatePenalty = logf(2.0f / (modelLength * (modelLength + 1.0f)));  //penalty for transition from b to kth 'm' option (msubk)
+        const float transitionEToC = NAIL_NAT_LOG_ONE_HALF;
+        const float coreModelAdjustment = (nStateEscapePenalty + nStateLoopPenaltyTotal +
             nStateEscapePenalty + bStateToAnyMStatePenalty + transitionEToC);
 
-        float backgroundLoopProbability = floatSeqLength / (floatSeqLength + 1); //background loop probability
-        float backgroundLoopPenaltyTotal = floatSeqLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
-        float backgroundMovePenalty = log(1.0 - backgroundLoopProbability);
-        float backgroundScore = backgroundLoopPenaltyTotal + backgroundMovePenalty;
+        const float backgroundLoopProbability = floatSeqLength / (floatSeqLength + 1.0f); //background loop probability
+        const float backgroundLoopPenaltyTotal = floatSeqLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
+        //this is equivalent to log(1.0 - (floatSeqLen / (floatSeqLen+1))), but has better numerical stability
+        const float backgroundMovePenalty = -logf(floatSeqLength+1.0L);
+        const float backgroundScore = backgroundLoopPenaltyTotal + backgroundMovePenalty;
 
-        float thresholdScoreInNats =
+        const float thresholdScoreInNats =
             (scoreRequiredForFullModelPvalue * NAIL_NAT_LOG_2) + backgroundScore - coreModelAdjustment;
         // that's in nats; let's shift to bits
         float thresholdScoreInBits = thresholdScoreInNats / NAIL_NAT_LOG_2;
@@ -159,4 +131,5 @@ namespace NailForge::PhmmProcessor {
 
         return alphabetCardinality * phmm.header.modelLength;
     }
+
 }
