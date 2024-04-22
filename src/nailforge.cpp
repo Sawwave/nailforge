@@ -64,6 +64,8 @@ namespace NailForge {
         P7HmmList phmmList;
         enum AwFmReturnCode awfmRc = awFmReadIndexFromFile(&fmIndex, fmIndexFileSrc, true);//always keep the SA in memory
         switch (awfmRc) {
+        case AwFmFileReadOkay://successful result
+            break;
         case AwFmFileAlreadyExists:
             std::cerr << "awfm index file already exists, could not write." << std::endl;
             return NailForge::ReturnCode::GeneralFailure;
@@ -73,6 +75,9 @@ namespace NailForge {
         case AwFmAllocationFailure:
             std::cerr << "failed to allocate memory for the fm index" << std::endl;
             return NailForge::ReturnCode::AllocationFailure;
+        default:
+            std::cerr << "unexpected return code from reading fm index: " << (int)awfmRc << std::endl;
+            return NailForge::ReturnCode::GeneralFailure;
         }
 
 
@@ -80,6 +85,8 @@ namespace NailForge {
         fastaVectorInit(&fastaVector);
         FastaVectorReturnCode fvrc = fastaVectorReadFasta(fastaFileSrc, &fastaVector);
         switch (fvrc) {
+        case FASTA_VECTOR_OK: //success case
+            break;
         case FASTA_VECTOR_ALLOCATION_FAIL:
             awFmDeallocIndex(fmIndex);
             std::cerr << "could not allocate memory for the sequence" << std::endl;
@@ -88,12 +95,19 @@ namespace NailForge {
             awFmDeallocIndex(fmIndex);
             std::cerr << "failed to  read fasta file." << std::endl;
             return NailForge::ReturnCode::FileReadError;
+        default:
+            awFmDeallocIndex(fmIndex);
+            std::cerr << "unexpected error when reading fasta" << std::endl;
+            return NailForge::ReturnCode::GeneralFailure;
         }
 
 
         //load the phmmList
         P7HmmReturnCode p7hmmRc = readP7Hmm(hmmFileSrc, &phmmList);
         switch (p7hmmRc) {
+        case p7HmmSuccess: //success state
+            break;
+
         case p7HmmFormatError:
             fastaVectorDealloc(&fastaVector);
             awFmDeallocIndex(fmIndex);
@@ -109,6 +123,11 @@ namespace NailForge {
             awFmDeallocIndex(fmIndex);
             std::cerr << ".hmm file not found" << std::endl;
             return ReturnCode::FileNotFound;
+        default:
+            std::cerr << "unexpected return code from reading phmm file" << std::endl;
+            fastaVectorDealloc(&fastaVector);
+            awFmDeallocIndex(fmIndex);
+            return ReturnCode::GeneralFailure;
         }
 
         if (!allModelsInHmmListSameAlphabet(&phmmList)) {
