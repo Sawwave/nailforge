@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
-
+#include <optional>
 
 
 namespace NailForge::StringTree {
@@ -27,9 +27,26 @@ namespace NailForge::StringTree {
         std::vector<StringTreeSparseScoreVectorEntry> diagonalEntries;
     };
 
-    void verifyDiagonalsPassingThreshold(const StringTree::Context& context, const StringTreeStackEntry& stackEntry,
-        const uint32_t& thisSymbolModelPosition, const float maxScoreAlongDiagonal, std::vector<AlignmentSeed>& seedList,
-        const uint8_t hitLength);
+    struct SequencePosition {
+        SequencePosition(const uint64_t bwtPosition, const AwFmIndex& fmIndex)noexcept {
+            uint64_t globalSequencePosition;
+            AwFmReturnCode awfmrc;
+
+            globalSequencePosition = awFmFindDatabaseHitPositionSingle(&fmIndex, bwtPosition, &awfmrc);
+            if (__builtin_expect(awfmrc != AwFmFileReadOkay, false)) {
+                std::cout << "Error: could not resolve bwt position into global sequence position" << std::endl;
+            }
+            //get the global position for this bwt position
+            awfmrc = awFmGetLocalSequencePositionFromIndexPosition(&fmIndex,
+                globalSequencePosition, &sequenceIdx, &localSequencePosition);
+            if (__builtin_expect(awfmrc != AwFmSuccess, false)) {
+                std::cout << "Error: could not resolve local sequence position from fm index" << std::endl;
+            }
+
+        }
+        uint64_t localSequencePosition;
+        uint64_t sequenceIdx;
+    };
 
 
     void findSeeds(const StringTree::Context& context, std::vector<AlignmentSeed>& seedList) {
@@ -55,6 +72,10 @@ namespace NailForge::StringTree {
         int_fast8_t currentDepth = 0;
         stack[0].symbol = 0;
         while (currentDepth >= 0) {
+
+            //default initialized to nullopt for every new string tree node
+            std::optional<std::vector<SequencePosition>> resolvedSequencePositionList;
+
             const uint8_t maxExtensionPositionsRemaining = (context.searchParams.maximumHitLength - 1) - currentDepth;
             const auto& currentSymbol = stack[currentDepth].symbol;
             //character encoding is the character after complimenting (if doing reverse compliment search)
@@ -105,8 +126,8 @@ namespace NailForge::StringTree {
                         }
 
                         if (__builtin_expect(accumulatedScorePassesThreshold && (currentDepth < (context.searchParams.maximumHitLength)), false)) {
-                            verifyDiagonalsPassingThreshold(context, stack[currentDepth], thisSymbolModelPosition, maxScoreSeen,
-                                seedList, currentDepth);
+                            verifyDiagonalsPassingThreshold(context, stack[currentDepth].searchRange, resolvedSequencePositionList,
+                                thisSymbolModelPosition, maxScoreSeen, seedList, currentDepth);
 
                         }
                         //if we didn't pass the threshold but if fully extended this kmer might, add it to the
@@ -140,38 +161,33 @@ namespace NailForge::StringTree {
         }
     }
 
-    void verifyDiagonalsPassingThreshold(const StringTree::Context& context, const StringTreeStackEntry& stackEntry,
-        const uint32_t& thisSymbolModelPosition, const float maxScoreAlongDiagonal, std::vector<AlignmentSeed>& seedList,
-        const uint8_t hitLength) {
+    void verifyDiagonalsPassingThreshold(const StringTree::Context& context, const AwFmSearchRange& searchRange,
+        std::optional<std::vector<SequencePosition>>& resolvedSequencePositionList, const uint32_t& thisSymbolModelPosition,
+        const float maxScoreAlongDiagonal, std::vector<AlignmentSeed>& seedList, const uint8_t hitLength) noexcept {
 
-        uint64_t searchRangeLength = awFmSearchRangeLength(&stackEntry.searchRange);
+        uint64_t searchRangeLength = awFmSearchRangeLength(&searchRange);
         //if there are way too many sequence hits, it's probably in some repetitive data, and we shouldn't report it.
         const double hitsPerMillionPositions = (double)searchRangeLength / (((double)context.fastaVector.sequence.count / (double)1e6));
         if (hitsPerMillionPositions > context.searchParams.maxSeqHitsPerMillion) {
             return;
         }
-        for (uint64_t bwtPosition = stackEntry.searchRange.startPtr;
-            bwtPosition <= stackEntry.searchRange.endPtr;bwtPosition++) {
-            uint64_t globalSequencePosition, localSequencePosition, sequenceIdx;
-            AwFmReturnCode awfmrc;
+        if (!resolvedSequencePositionList.has_value()) {
+            resolvedSequencePositionList = std::vector<SequencePosition>();
+            resolvedSequencePositionList->reserve(awFmSearchRangeLength(&searchRange));
 
-            globalSequencePosition = awFmFindDatabaseHitPositionSingle(&context.fmIndex,
-                bwtPosition, &awfmrc);
-            if (__builtin_expect(awfmrc != AwFmFileReadOkay, false)) {
-                std::cout << "Error: could not resolve bwt position into global sequence position" << std::endl;
+            //resolve the search range into a list of actual positions in the target sequence.
+            for (uint64_t bwtPosition = searchRange.startPtr;
+                bwtPosition < searchRange.endPtr;bwtPosition++) {
+                resolvedSequencePositionList->emplace_back(bwtPosition, context.fmIndex);
             }
-
-            //get the global position for this bwt position
-            awfmrc = awFmGetLocalSequencePositionFromIndexPosition(&context.fmIndex,
-                globalSequencePosition, &sequenceIdx, &localSequencePosition);
-            if (__builtin_expect(awfmrc != AwFmSuccess, false)) {
-                std::cout << "Error: could not resolve local sequence position from fm index" << std::endl;
-            }
-
-            const StringTree::HitPosition hitPosition(sequenceIdx, localSequencePosition, thisSymbolModelPosition, hitLength);
+        }
+        for (const auto& resolvedSequencePosition : *resolvedSequencePositionList) {
+            const StringTree::HitPosition hitPosition(resolvedSequencePosition.sequenceIdx,
+                resolvedSequencePosition.localSequencePosition, thisSymbolModelPosition, hitLength);
             bool seedIsVerified = SeedExtension::verifySeedViaExtension(context, hitPosition, maxScoreAlongDiagonal);
             if (seedIsVerified) {
-                seedList.emplace_back(localSequencePosition, thisSymbolModelPosition, sequenceIdx);
+                seedList.emplace_back(resolvedSequencePosition.localSequencePosition,
+                    thisSymbolModelPosition, resolvedSequencePosition.sequenceIdx);
 
             }
         }
