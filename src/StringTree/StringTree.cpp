@@ -10,7 +10,7 @@
 
 namespace NailForge::StringTree {
 
-
+    /// @brief Intermediary data structure detailing a position that currently passes the string tree, along with the score at that position.
     struct StringTreeSparseScoreVectorEntry {
         StringTreeSparseScoreVectorEntry(const uint32_t modelPosition, const float score) :
             modelPosition(modelPosition), score(score), maxScore(score) {}
@@ -21,12 +21,14 @@ namespace NailForge::StringTree {
         float maxScore;
     };
 
+    /// @brief List of the positions passing the current node at the string tree.
     struct StringTreeStackEntry {
         AwFmSearchRange searchRange;
         uint8_t symbol;
         std::vector<StringTreeSparseScoreVectorEntry> diagonalEntries;
     };
 
+    /// @brief struct storing the resolved FM-index position from BWT-space, now in sequence-space
     struct SequencePosition {
         SequencePosition(const uint64_t bwtPosition, const AwFmIndex& fmIndex)noexcept {
             uint64_t globalSequencePosition;
@@ -49,8 +51,21 @@ namespace NailForge::StringTree {
     };
 
 
-    void findSeeds(const StringTree::Context& context, std::vector<AlignmentSeed>& seedList) {
-        
+    /// @brief Prepares a node that has positions passing the score threshold for extension via the SeedExtension module
+    /// @param context Search context for this model
+    /// @param searchRange FM-index search range representing positions in the target for the string represented by the current path through the string tree.  
+    /// @param resolvedSequencePositionList optional list of resolved positions. if this list is nullopt, this function will use the fm index to find the positions.
+    /// @param thisSymbolModelPosition position in the model that this node represents
+    /// @param maxScoreAlongDiagonal best score seen along the entire diagonal
+    /// @param seedList list of seeds to append any verified extensions to
+    /// @param hitLength length of the hit from the string tree, expected to be currentDepth
+    void verifyDiagonalsPassingThreshold(const StringTree::Context& context, const AwFmSearchRange& searchRange,
+        std::optional<std::vector<SequencePosition>>& resolvedSequencePositionList, const uint32_t& thisSymbolModelPosition,
+        const float maxScoreAlongDiagonal, std::vector<AlignmentSeed>& seedList, const uint8_t hitLength) noexcept;
+
+
+    void findSeeds(const StringTree::Context& context, std::vector<AlignmentSeed>& seedList) noexcept {
+
         const auto awfmBackwardStepFunction = context.phmm.header.alphabet == P7HmmReaderAlphabetAmino ?
             awFmAminoIterativeStepBackwardSearch : awFmNucleotideIterativeStepBackwardSearch;
 
