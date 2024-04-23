@@ -8,18 +8,28 @@
 
 namespace NailForge::SeedExtension {
 
-
-
-    //lsp, mp, params, phmm, matchScores, hitLen
+    /// @brief Verifies a hit from the String Tree by extending the flanking regions of the diagonal to attempt to pass the final threshold score
+    /// @param context String Tree search context data
+    /// @param hitPosition position of the hit
+    /// @param maxScoreAlongDiagonal maximum score seen along the initial diagonal
+    /// @return true if the seed is verified, false otherwise
     bool verifySeedViaExtension(const StringTree::Context& context,
-        const StringTree::HitPosition, const float maxScoreAlongDiagonal);
+        const StringTree::HitPosition& hitPosition, const float maxScoreAlongDiagonal);
 
+
+    /// @brief 
+    /// @tparam isReverseCompliment determines if the implementation should be aligning as the reverse compliment strand 
+    /// @param sequencePtr pointer to the first character of the sequence that the hit occurs in 
+    /// @param sequenceLength length of the sequence the hit occurs in
+    /// @param context string tree search context data
+    /// @param hitPosition position of the hit in model/sequence space
+    /// @param isPriorFlank determines if the computation should be looking at the prior flank or post flank
+    /// @return score of the flanking region. This does not include the original diagonal's score.
     template<bool isReverseCompliment>
     float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept;
 
 
-    //hitLength should be currentDepth + 1
     template<bool isReverseCompliment>
     float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept {
@@ -84,7 +94,6 @@ namespace NailForge::SeedExtension {
         }
         return maxAccumulatedScore;
     }
-
 }
 
 #endif
