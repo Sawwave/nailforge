@@ -40,13 +40,13 @@ namespace NailForge::StringTree::Table {
      * [30, 45, 60, 75, 90, 75, 40, 0]
      *
     */
-    void MaxExtensionTable::populateTable(const std::vector<float>& scores, bool isReverseCompliment) noexcept {
+    void MaxExtensionTable::populateTable(const std::vector<float>& scores, bool isReverseComplement) noexcept {
 
         //the first row of the table is all zeros, because extending anything by 0 characters won't change the score
         //the second row of the table is what you get by extending the position by one character.
         //since FM-index works from the end of the string, this means that standard search will extend backwards,
         //and reverse compliment will extend forward.
-        if (isReverseCompliment) {
+        if (isReverseComplement) {
             //find the maximum score possible by extending every position 1 character
             for (uint32_t modelPosition = 0; modelPosition < (modelLength - 1); modelPosition++) {
                 const float* scoreVector = &scores[(modelPosition + 1) * alphabetSize];

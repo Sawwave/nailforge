@@ -11,7 +11,7 @@ namespace NailForge::StringTree::Table
     class MaxExtensionTable {
     public:
         MaxExtensionTable(const uint32_t modelLength, const uint8_t depth, const uint8_t alphabetSize)noexcept;
-        void populateTable(const std::vector<float>& scores, bool isReverseCompliment) noexcept;
+        void populateTable(const std::vector<float>& scores, bool isReverseComplement) noexcept;
         float getMaxExtensionScore(const uint32_t modelPosition, const uint8_t extensionLength) noexcept;
 
     protected:
