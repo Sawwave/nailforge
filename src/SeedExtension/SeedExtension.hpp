@@ -91,6 +91,9 @@ namespace NailForge::SeedExtension {
 
             accumulatedScore += matchScore;
             maxAccumulatedScore = std::max(maxAccumulatedScore, accumulatedScore);
+            if(accumulatedScore < -10.0f){
+                return maxAccumulatedScore;
+            }
         }
         return maxAccumulatedScore;
     }
