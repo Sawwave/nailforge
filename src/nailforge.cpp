@@ -3,6 +3,7 @@
 #include "StringTree/StringTree.hpp"
 #include <string>
 #include <iostream>
+#include <chrono>
 
 namespace NailForge {
     bool allModelsInHmmListSameAlphabet(P7HmmList* phmmList);
@@ -51,7 +52,8 @@ namespace NailForge {
 
     NailForge::ReturnCode filterWithHmmFile(const char* hmmFileSrc, const char* fastaFileSrc, const char* fmIndexFileSrc,
         const NailForge::SearchParams& params, const SearchType searchType, const uint8_t numThreads,
-        std::vector<std::vector<AlignmentSeed>>& primarySeedList, std::vector<std::vector<AlignmentSeed>>& complimentSeedList) {
+        std::vector<std::vector<AlignmentSeed>>& primarySeedList, std::vector<std::vector<AlignmentSeed>>& complementSeedList, 
+        float &runtimeInSeconds) {
 
         omp_set_num_threads(numThreads);
 
@@ -163,23 +165,30 @@ namespace NailForge {
         }
 
         primarySeedList.resize(phmmList.count);
-        complimentSeedList.resize(phmmList.count);
+        complementSeedList.resize(phmmList.count);
+
+        auto searchStartTime = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for
         for (uint32_t modelIdx = 0; modelIdx < phmmList.count; modelIdx++) {
-            const auto& phmm = phmmList.phmms[modelIdx];
+
+            const P7Hmm& phmm = phmmList.phmms[modelIdx];
             std::vector<float> matchScores = NailForge::PhmmProcessor::toFloatMatchScores(phmm);
 
-            if (searchType != NailForge::SearchType::ComplimentStrand) {
-                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm,
-                    matchScores, primarySeedList[modelIdx], params, false);
+            if (searchType != NailForge::SearchType::ComplementStrand) {
+                const StringTree::Context searchContext(*fmIndex, fastaVector, phmm, matchScores, params, false);
+                NailForge::StringTree::findSeeds(searchContext, primarySeedList[modelIdx]);
             }
             if (searchType != NailForge::SearchType::Standard) {
-                NailForge::StringTree::findSeeds(fmIndex, fastaVector, phmm,
-                    matchScores, complimentSeedList[modelIdx], params, true);
+                const StringTree::Context searchContext(*fmIndex, fastaVector, phmm, matchScores, params, true);
+                NailForge::StringTree::findSeeds(searchContext, complementSeedList[modelIdx]);
 
             }
         }
+
+        auto searchEndTime = std::chrono::high_resolution_clock::now();
+        auto searchTimeDuration = std::chrono::duration_cast<std::chrono::microseconds>(searchEndTime - searchStartTime);
+        runtimeInSeconds = (float)searchTimeDuration.count() / 1000000.0f;
 
         fastaVectorDealloc(&fastaVector);
         awFmDeallocIndex(fmIndex);
