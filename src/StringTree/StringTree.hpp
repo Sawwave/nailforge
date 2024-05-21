@@ -9,17 +9,15 @@ namespace NailForge::StringTree {
     struct Context {
         Context(const AwFmIndex& fmIndex, const FastaVector& fastaVector,
             const P7Hmm& phmm, const std::vector<float>& matchScores, const NailForge::SearchParams& searchParams,
-            const float extensionThresholdScore, const bool isReverseCompliment)noexcept :
+            const bool isReverseComplement)noexcept :
             fmIndex(fmIndex), fastaVector(fastaVector), phmm(phmm), matchScores(matchScores),
-            searchParams(searchParams), extensionThresholdScore(extensionThresholdScore),
-            isReverseCompliment(isReverseCompliment) {}
+            searchParams(searchParams), isReverseComplement(isReverseComplement) {}
         const AwFmIndex& fmIndex;
         const FastaVector& fastaVector;
         const P7Hmm& phmm;
         const std::vector<float>& matchScores;
         const NailForge::SearchParams& searchParams;
-        const float extensionThresholdScore;
-        const bool isReverseCompliment;
+        const bool isReverseComplement;
     };
 
 
