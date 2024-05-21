@@ -69,8 +69,8 @@ namespace NailForge::StringTree {
         const auto awfmBackwardStepFunction = context.phmm.header.alphabet == P7HmmReaderAlphabetAmino ?
             awFmAminoIterativeStepBackwardSearch : awFmNucleotideIterativeStepBackwardSearch;
 
-        const uint32_t nextDiagonalCellOffset = context.isReverseCompliment ? 1 : -1;
-        const uint8_t modelSymbolEncodingBitmask = context.isReverseCompliment ? 0b11 : 0x00;
+        const uint32_t nextDiagonalCellOffset = context.isReverseComplement ? 1 : -1;
+        const uint8_t modelSymbolEncodingBitmask = context.isReverseComplement ? 0b11 : 0x00;
         const uint8_t alphabetSize = context.phmm.header.alphabet == P7HmmReaderAlphabetAmino ? 20 : 4;
         const uint32_t modelLength = context.phmm.header.modelLength;
 
@@ -80,20 +80,21 @@ namespace NailForge::StringTree {
 
         Table::MaxExtensionTable maxExtensionTable =
             Table::MaxExtensionTable(modelLength, context.searchParams.maximumHitLength, alphabetSize);
-        maxExtensionTable.populateTable(context.matchScores, context.isReverseCompliment);
+        maxExtensionTable.populateTable(context.matchScores, context.isReverseComplement);
 
 
         //string tree loop begins here
         int_fast8_t currentDepth = 0;
         stack[0].symbol = 0;
         while (currentDepth >= 0) {
+            auto& thisSearchRange = stack[currentDepth].searchRange;
 
             //default initialized to nullopt for every new string tree node
             std::optional<std::vector<SequencePosition>> resolvedSequencePositionList;
 
             const uint8_t maxExtensionPositionsRemaining = (context.searchParams.maximumHitLength - 1) - currentDepth;
             const auto& currentSymbol = stack[currentDepth].symbol;
-            //character encoding is the character after complimenting (if doing reverse compliment search)
+            //character encoding is the character after complementing (if doing reverse complement search)
             const uint8_t phmmSymbolIdx = currentSymbol ^ modelSymbolEncodingBitmask;
             stack[currentDepth].diagonalEntries.clear();
 
@@ -102,7 +103,7 @@ namespace NailForge::StringTree {
                 stack[0].searchRange.startPtr = context.fmIndex.prefixSums[currentSymbol];
                 stack[0].searchRange.endPtr = context.fmIndex.prefixSums[currentSymbol + 1] - 1;
                 for (uint32_t modelPosition = 0; modelPosition < modelLength; modelPosition++) {
-                    //get the match score. note that we look up the non-complimented score, but we'll write down the complimented character later
+                    //get the match score. note that we look up the non-complemented score, but we'll write down the complemented character later
                     const float matchScore = context.matchScores[(modelPosition * alphabetSize) + phmmSymbolIdx];
 
                     //only try extending this position if the match score was positive.
@@ -117,6 +118,7 @@ namespace NailForge::StringTree {
             }
 
             else {
+                const auto& prevSearchRange = stack[currentDepth - 1].searchRange;
                 const auto& prevDiagonalEntries = stack[currentDepth - 1].diagonalEntries;
 
                 bool hasResolvedSearchRange = false;
@@ -133,15 +135,16 @@ namespace NailForge::StringTree {
                         const bool accumulatedScorePassesThreshold = accumulatedScore >= context.searchParams.mainDiagonalThresholdScore;
                         const bool bestExtensionPossiblePassesThreshold = bestScorePossible >= context.searchParams.mainDiagonalThresholdScore;
 
+
                         //resolve the search range if we haven't yet.
                         if (__builtin_expect(!hasResolvedSearchRange && bestExtensionPossiblePassesThreshold, false)) {
-                            stack[currentDepth].searchRange = stack[currentDepth - 1].searchRange;
-                            awfmBackwardStepFunction(&context.fmIndex, &stack[currentDepth].searchRange, currentSymbol);
+                            thisSearchRange = prevSearchRange;
+                            awfmBackwardStepFunction(&context.fmIndex, &thisSearchRange, currentSymbol);
                             hasResolvedSearchRange = true;
                         }
 
                         if (__builtin_expect(accumulatedScorePassesThreshold && (currentDepth < (context.searchParams.maximumHitLength)), false)) {
-                            verifyDiagonalsPassingThreshold(context, stack[currentDepth].searchRange, resolvedSequencePositionList,
+                            verifyDiagonalsPassingThreshold(context, thisSearchRange, resolvedSequencePositionList,
                                 thisSymbolModelPosition, maxScoreSeen, seedList, currentDepth);
 
                         }
@@ -159,7 +162,7 @@ namespace NailForge::StringTree {
             bool exploreFurtherDownTree =
                 ((currentDepth) < (context.searchParams.maximumHitLength - 1)) &&
                 stack[currentDepth].diagonalEntries.size() != 0 &&
-                (awFmSearchRangeLength(&stack[currentDepth].searchRange) != 0);
+                (awFmSearchRangeLength(&thisSearchRange) != 0);
 
             if (exploreFurtherDownTree) {
                 stack[++currentDepth].symbol = 0;
@@ -180,7 +183,10 @@ namespace NailForge::StringTree {
         std::optional<std::vector<SequencePosition>>& resolvedSequencePositionList, const uint32_t& thisSymbolModelPosition,
         const float maxScoreAlongDiagonal, std::vector<AlignmentSeed>& seedList, const uint8_t hitLength) noexcept {
 
-        uint64_t searchRangeLength = awFmSearchRangeLength(&searchRange);
+        const uint64_t searchRangeLength = awFmSearchRangeLength(&searchRange);
+        if (searchRangeLength == 0) {
+            return;
+        }
         //if there are way too many sequence hits, it's probably in some repetitive data, and we shouldn't report it.
         const double hitsPerMillionPositions = (double)searchRangeLength / (((double)context.fastaVector.sequence.count / (double)1e6));
         if (hitsPerMillionPositions > context.searchParams.maxSeqHitsPerMillion) {
@@ -199,11 +205,10 @@ namespace NailForge::StringTree {
         for (const auto& resolvedSequencePosition : *resolvedSequencePositionList) {
             const StringTree::HitPosition hitPosition(resolvedSequencePosition.sequenceIdx,
                 resolvedSequencePosition.localSequencePosition, thisSymbolModelPosition, hitLength);
-            bool seedIsVerified = SeedExtension::verifySeedViaExtension(context, hitPosition, maxScoreAlongDiagonal);
-            if (seedIsVerified) {
+            const auto verificationResult = SeedExtension::verifySeedViaExtension(context, hitPosition, maxScoreAlongDiagonal);
+            if (verificationResult.isVerified) {
                 seedList.emplace_back(resolvedSequencePosition.localSequencePosition,
-                    thisSymbolModelPosition, resolvedSequencePosition.sequenceIdx);
-
+                    thisSymbolModelPosition, resolvedSequencePosition.sequenceIdx, verificationResult.maximumScore);
             }
         }
     }
