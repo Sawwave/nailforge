@@ -8,33 +8,41 @@
 
 namespace NailForge::SeedExtension {
 
+
+    struct ExtensionResult {
+        ExtensionResult(const float maximumScore, const bool isVerified) :
+            maximumScore(maximumScore), isVerified(isVerified) {}
+        float maximumScore;
+        bool isVerified;
+    };
+
     /// @brief Verifies a hit from the String Tree by extending the flanking regions of the diagonal to attempt to pass the final threshold score
     /// @param context String Tree search context data
     /// @param hitPosition position of the hit
     /// @param maxScoreAlongDiagonal maximum score seen along the initial diagonal
-    /// @return true if the seed is verified, false otherwise
-    bool verifySeedViaExtension(const StringTree::Context& context,
+    /// @return struct containing the final score, and whether it was verified
+    ExtensionResult verifySeedViaExtension(const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const float maxScoreAlongDiagonal);
 
 
     /// @brief 
-    /// @tparam isReverseCompliment determines if the implementation should be aligning as the reverse compliment strand 
+    /// @tparam isReverseComplement determines if the implementation should be aligning as the reverse complement strand 
     /// @param sequencePtr pointer to the first character of the sequence that the hit occurs in 
     /// @param sequenceLength length of the sequence the hit occurs in
     /// @param context string tree search context data
     /// @param hitPosition position of the hit in model/sequence space
     /// @param isPriorFlank determines if the computation should be looking at the prior flank or post flank
     /// @return score of the flanking region. This does not include the original diagonal's score.
-    template<bool isReverseCompliment>
+    template<bool isReverseComplement>
     float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept;
 
 
-    template<bool isReverseCompliment>
+    template<bool isReverseComplement>
     float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept {
 
-        const uint8_t symbolEncodingComplimentBitmask = isReverseCompliment ? 0x03 : 0x00;
+        const uint8_t symbolEncodingComplementBitmask = isReverseComplement ? 0x03 : 0x00;
         const NailForge::Alphabet alphabet = context.phmm.header.alphabet == P7HmmReaderAlphabetAmino ?
             NailForge::Alphabet::Amino : NailForge::Alphabet::Dna;
         const auto alphabetSize = NailForge::getAlphabetSize(alphabet);
@@ -43,7 +51,7 @@ namespace NailForge::SeedExtension {
         float maxAccumulatedScore = 0.0f;
         uint64_t flankLength;
 
-        if constexpr (isReverseCompliment) {
+        if constexpr (isReverseComplement) {
             flankLength = isPriorFlank ?
                 std::min(hitPosition.localSequencePosition,
                     static_cast<uint64_t>(context.phmm.header.modelLength - hitPosition.modelPosition - 1)) :
@@ -67,7 +75,7 @@ namespace NailForge::SeedExtension {
                 hitPosition.localSequencePosition - flankPosition - 1 :
                 hitPosition.localSequencePosition + flankPosition + hitPosition.hitLength;
 
-            if constexpr (isReverseCompliment) {
+            if constexpr (isReverseComplement) {
                 flankModelPosition = isPriorFlank ?
                     hitPosition.modelPosition + flankPosition + 1 :
                     hitPosition.modelPosition - flankPosition - hitPosition.hitLength;
@@ -80,13 +88,7 @@ namespace NailForge::SeedExtension {
 
             const char sequenceSymbol = sequencePtr[flankSequencePosition];
             const uint8_t symbolIdx = NailForge::LetterConversion::asciiLetterToLetterIndex(sequenceSymbol, alphabet);
-            const uint8_t phmmSymbolIdx = symbolIdx ^ symbolEncodingComplimentBitmask;
-            if (flankModelPosition >= context.phmm.header.modelLength) {
-                std::cout << "\nflank mod pos " << flankModelPosition << "greater than len " << context.phmm.header.modelLength << std::endl;
-                std::cout << "iscomp " << (int)isReverseCompliment << ", isprior? " << (int)isPriorFlank << std::endl;
-                std::cout << "modpos" << hitPosition.modelPosition << ", flankPosition " << flankPosition << std::endl;
-                std::cout << "hitlen " << (int)hitPosition.hitLength << std::endl;
-            }
+            const uint8_t phmmSymbolIdx = symbolIdx ^ symbolEncodingComplementBitmask;
             const float matchScore = context.matchScores[(flankModelPosition * alphabetSize) + phmmSymbolIdx];
 
             accumulatedScore += matchScore;
