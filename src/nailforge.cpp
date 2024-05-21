@@ -17,15 +17,15 @@ namespace NailForge {
         awfmConfig.storeOriginalSequence = false;
 
         if (alphabet == Alphabet::Dna) {
-            awfmConfig.kmerLengthInSeedTable = 12;  //16*4^12 = 268MB
+            awfmConfig.kmerLengthInSeedTable = 1;  //16*4^12 = 268MB
             awfmConfig.alphabetType = AwFmAlphabetDna;
         }
         else if (alphabet == Alphabet::Rna) {
-            awfmConfig.kmerLengthInSeedTable = 12;  //16*4^12 = 268MB
+            awfmConfig.kmerLengthInSeedTable = 1;  //16*4^12 = 268MB
             awfmConfig.alphabetType = AwFmAlphabetRna;
         }
         else {
-            awfmConfig.kmerLengthInSeedTable = 5;   //16*20^6 = 51MB
+            awfmConfig.kmerLengthInSeedTable = 1;   //16*20^6 = 51MB
             awfmConfig.alphabetType = AwFmAlphabetAmino;
         }
 
