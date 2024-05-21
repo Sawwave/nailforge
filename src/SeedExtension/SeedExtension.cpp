@@ -8,7 +8,7 @@
 
 namespace NailForge::SeedExtension {
 
-    bool verifySeedViaExtension(const StringTree::Context& context,
+    ExtensionResult verifySeedViaExtension(const StringTree::Context& context,
         const StringTree::HitPosition& hitPosition, const float maxScoreAlongDiagonal) {
 
         char* sequencePtr;
@@ -16,19 +16,23 @@ namespace NailForge::SeedExtension {
         fastaVectorGetSequence(&context.fastaVector, hitPosition.sequenceIdx, &sequencePtr, &sequenceLength);
         if (sequencePtr == NULL) {
             std::cerr << "Error: could not read sequence from fasta at given sequence idx" << std::endl;
-            return false;
+            return ExtensionResult(0, false);
         }
+
+        const float extensionThresholdScore = PhmmProcessor::findThreshold(context.phmm,
+            context.searchParams.extensionPValue, sequenceLength);
 
         float priorFlankScore, postFlankScore;
-        if (context.isReverseCompliment) {
+        if (context.isReverseComplement) {
             priorFlankScore = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, true);
-            postFlankScore = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, false);
+            postFlankScore = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, false);
         }
         else {
-            priorFlankScore = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, true);
+            priorFlankScore = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, true);
             postFlankScore = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, false);
         }
 
-        return (priorFlankScore + postFlankScore + maxScoreAlongDiagonal) >= context.extensionThresholdScore;
+        const float finalScore = priorFlankScore + postFlankScore + maxScoreAlongDiagonal;
+        return ExtensionResult(finalScore, finalScore >= extensionThresholdScore);
     }
 }
