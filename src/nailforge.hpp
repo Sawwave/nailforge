@@ -20,7 +20,7 @@ namespace NailForge {
 
     enum class SearchType {
         Standard,
-        ComplimentStrand,
+        ComplementStrand,
         DualStrand
     };
 
@@ -110,7 +110,8 @@ namespace NailForge {
 
     NailForge::ReturnCode filterWithHmmFile(const char* hmmFileSrc, const char* fastaFileSrc, const char* fmIndexFileSrc,
         const SearchParams& params, const SearchType searchType, const uint8_t numThreads,
-        std::vector<std::vector<AlignmentSeed>>& primarySeedList, std::vector<std::vector<AlignmentSeed>>& complimentSeedList);
+        std::vector<std::vector<AlignmentSeed>>& primarySeedList, std::vector<std::vector<AlignmentSeed>>& complementSeedList,
+        float &searchTimedDuration);
 }
 
 #endif
