@@ -81,8 +81,11 @@ namespace NailForge {
         uint64_t sequencePosition;
         uint32_t modelPosition;
         uint32_t sequenceIdx;
-        AlignmentSeed(const uint64_t sequencePosition, const uint32_t modelPosition, uint32_t sequenceIdx) :
-            sequencePosition(sequencePosition), modelPosition(modelPosition), sequenceIdx(sequenceIdx) {}
+        float fullScore;
+        AlignmentSeed(const uint64_t sequencePosition, const uint32_t modelPosition,
+            const uint32_t sequenceIdx, const float fullScore) :
+            sequencePosition(sequencePosition), modelPosition(modelPosition),
+            sequenceIdx(sequenceIdx), fullScore(fullScore) {}
         bool operator <(const AlignmentSeed& otherSeed) {
             if (sequenceIdx != otherSeed.sequenceIdx) {
                 return sequenceIdx < otherSeed.sequenceIdx;
