@@ -63,12 +63,11 @@ namespace NailForge::PhmmProcessor {
     }
 
 
-    float findThreshold(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue) {
+    float findThreshold(const P7Hmm& phmm, const float pValue, const size_t sequenceLength) {
         const float mu = phmm.stats.msvGumbelMu;
         const float lambda = phmm.stats.msvGumbelLambda;
         const float modelLength = phmm.header.modelLength;
-        //if the MAX is missing, we'll just use the sequence length here
-        const float floatSeqLength = phmm.header.maxLength != 0 ?
+        const float maxAlignLength = phmm.header.maxLength != 0 ?
             phmm.header.maxLength : sequenceLength;
 
         //given the probability of survival, give me the score. what score gives the p value?
@@ -76,18 +75,18 @@ namespace NailForge::PhmmProcessor {
         const float scoreRequiredForFullModelPvalue = PhmmProcessor::gumbelInverseSurvival(lambda, mu, pValue); //inverse survival (gumbel distribution)
         //we're only working with the single-hit model, so we need to add some penalties to make the probabilities match.
         //finds the probablility of staying in the n state (or c state), looping, summed for all positions in the target
-        const float lengthWithAdditionalStates = floatSeqLength + 3.0f;
-        const float nStateLoopPenaltyTotal = (floatSeqLength * floatSeqLength) / (lengthWithAdditionalStates);
+        const float lengthWithAdditionalStates = maxAlignLength + 3.0f;
+        const float nStateLoopPenaltyTotal = logf(maxAlignLength / lengthWithAdditionalStates) * maxAlignLength;
         const float nStateEscapePenalty = logf(3.0f / lengthWithAdditionalStates);  //penalty for escaping the n or c states (increases by 1 every time seq len doubles)
         const float bStateToAnyMStatePenalty = logf(2.0f / (modelLength * (modelLength + 1.0f)));  //penalty for transition from b to kth 'm' option (msubk)
-        const float transitionEToC = NAIL_NAT_LOG_ONE_HALF;
+        const float transitionEToC = logf(1.0f / 2.0f);
         const float coreModelAdjustment = (nStateEscapePenalty + nStateLoopPenaltyTotal +
             nStateEscapePenalty + bStateToAnyMStatePenalty + transitionEToC);
 
-        const float backgroundLoopProbability = floatSeqLength / (floatSeqLength + 1.0f); //background loop probability
-        const float backgroundLoopPenaltyTotal = floatSeqLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
+        const double backgroundLoopProbability = (double)maxAlignLength / ((double)maxAlignLength + 1.0L); //background loop probability
+        const float backgroundLoopPenaltyTotal = maxAlignLength * log(backgroundLoopProbability);  //total length penalty for the max sequence length background
         //this is equivalent to log(1.0 - (floatSeqLen / (floatSeqLen+1))), but has better numerical stability
-        const float backgroundMovePenalty = -logf(floatSeqLength+1.0L);
+        const float backgroundMovePenalty = -logf(maxAlignLength + 1.0L);
         const float backgroundScore = backgroundLoopPenaltyTotal + backgroundMovePenalty;
 
         const float thresholdScoreInNats =
@@ -123,10 +122,8 @@ namespace NailForge::PhmmProcessor {
         case P7HmmReaderAlphabetDna:alphabetCardinality = 4;        break;
         case P7HmmReaderAlphabetRna:alphabetCardinality = 4;        break;
         case P7HmmReaderAlphabetAmino:alphabetCardinality = 20;     break;
-        case P7HmmReaderAlphabetCoins: alphabetCardinality = 2;     break;
-        case P7HmmReaderAlphabetDice:  alphabetCardinality = 6;     break;
         default:
-            throw std::runtime_error("Unsupported phmm alphabet");
+            throw std::runtime_error("Unsupported phmm alphabet. Alphabet must be Dna, Rna, or Amino");
         }
 
         return alphabetCardinality * phmm.header.modelLength;

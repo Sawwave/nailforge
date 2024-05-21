@@ -13,10 +13,10 @@ namespace NailForge::PhmmProcessor {
 
     /// @brief finds the threshold score necessary to meet a given p-value. Will use the hmm MAXL property if it exists.
     /// @param phmm phmm to find the threshold for
-    /// @param sequenceLength length of the target sequence. this will be used if the MAXL property is missing.
     /// @param pValue p-value that will be hit at the returned score.
+    /// @param sequenceLength length of the target sequence. this will be used if the MAXL property is missing.
     /// @return score, in bits, necessary to hit the given p-value.
-    float findThreshold(const P7Hmm& phmm, const uint64_t sequenceLength, const float pValue);
+    float findThreshold(const P7Hmm& phmm, const float pValue, const size_t sequenceLength);
 
     /// @brief finds the threshold score necessary to hit to meet the given p-value for a nucleotide phmm.
     /// @param phmm phmm to find the threshold for
