@@ -168,7 +168,7 @@ namespace NailForge::StringTree {
                 stack[++currentDepth].symbol = 0;
             }
             else {
-                while (stack[currentDepth].symbol == alphabetSize - 1 && currentDepth >= 0) {
+                while (currentDepth >= 0 && stack[currentDepth].symbol == alphabetSize - 1) {
                     stack[currentDepth--].symbol = 0;
                 }
                 if (__builtin_expect(currentDepth >= 0, true)) {
