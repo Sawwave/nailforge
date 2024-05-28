@@ -194,11 +194,11 @@ namespace NailForge::StringTree {
         }
         if (!resolvedSequencePositionList.has_value()) {
             resolvedSequencePositionList = std::vector<SequencePosition>();
-            resolvedSequencePositionList->reserve(awFmSearchRangeLength(&searchRange));
+            resolvedSequencePositionList->reserve(searchRangeLength);
 
             //resolve the search range into a list of actual positions in the target sequence.
             for (uint64_t bwtPosition = searchRange.startPtr;
-                bwtPosition < searchRange.endPtr;bwtPosition++) {
+                bwtPosition <= searchRange.endPtr; bwtPosition++) {
                 resolvedSequencePositionList->emplace_back(bwtPosition, context.fmIndex);
             }
         }
