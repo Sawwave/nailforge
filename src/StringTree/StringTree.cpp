@@ -143,7 +143,7 @@ namespace NailForge::StringTree {
                             hasResolvedSearchRange = true;
                         }
 
-                        if (__builtin_expect(accumulatedScorePassesThreshold && (currentDepth < (context.searchParams.maximumHitLength)), false)) {
+                        if (__builtin_expect(accumulatedScorePassesThreshold && (currentDepth < ((int32_t)context.searchParams.maximumHitLength)), false)) {
                             verifyDiagonalsPassingThreshold(context, thisSearchRange, resolvedSequencePositionList,
                                 thisSymbolModelPosition, maxScoreSeen, seedList, currentDepth);
 
