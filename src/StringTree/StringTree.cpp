@@ -143,7 +143,8 @@ namespace NailForge::StringTree {
                             hasResolvedSearchRange = true;
                         }
 
-                        if (__builtin_expect(accumulatedScorePassesThreshold && (currentDepth < ((int32_t)context.searchParams.maximumHitLength)), false)) {
+                        if (__builtin_expect(accumulatedScorePassesThreshold && 
+                        (currentDepth < static_cast<int32_t>(context.searchParams.maximumHitLength)), false)) {
                             verifyDiagonalsPassingThreshold(context, thisSearchRange, resolvedSequencePositionList,
                                 thisSymbolModelPosition, maxScoreSeen, seedList, currentDepth);
 
@@ -160,7 +161,7 @@ namespace NailForge::StringTree {
 
             //roll over the current symbol, and current depth if necessary
             bool exploreFurtherDownTree =
-                ((currentDepth) < (context.searchParams.maximumHitLength - 1)) &&
+                ((currentDepth) < (static_cast<int32_t>(context.searchParams.maximumHitLength) - 1)) &&
                 stack[currentDepth].diagonalEntries.size() != 0 &&
                 (awFmSearchRangeLength(&thisSearchRange) != 0);
 
