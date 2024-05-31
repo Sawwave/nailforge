@@ -1,5 +1,7 @@
 #include "../src/nailforge.hpp"
 #include "../argparse/include/argparse/argparse.hpp"
+#include "../src/PhmmProcessor/PhmmProcessor.hpp"
+#include "../src/Alphabet/LetterConversion.hpp"
 #include <cctype>
 #include <string>
 #include <cstring>
@@ -9,15 +11,23 @@
 #include <numeric>
 #include <fstream>
 #include <cmath>
+#include <optional>
+
+using std::vector;
+using std::string;
+using std::unique_ptr;
 
 const std::string modelNamePrefix = "TRAIN.";
-const bool isTransmark = false;
 
 struct PositionListEntry {
     PositionListEntry(const std::string line) {
         located = false;
         std::istringstream stringStream(line);
         std::string fullModelName;
+        std::string tmp;
+        std::string beginString;
+        std::string endString;
+
         stringStream >> fullModelName;
 
         std::istringstream modelNameStream(fullModelName);
@@ -25,22 +35,19 @@ struct PositionListEntry {
 
         stringStream >> sequenceName;
 
-        std::string tmp;
         stringStream >> tmp;
 
-        std::string beginString;
         stringStream >> beginString;
         positionFrom = std::stoi(beginString);
-        std::string endString;
         stringStream >> endString;
         positionTo = std::stoi(endString);
 
         if (positionFrom > positionTo) {
-            isReverseCompliment = true;
+            isReverseComplement = true;
             std::swap(positionFrom, positionTo);
         }
         else {
-            isReverseCompliment = false;
+            isReverseComplement = false;
         }
     }
 
@@ -48,11 +55,11 @@ struct PositionListEntry {
         const uint64_t posFrom, const uint64_t posTo) :
         modelName(modelName), sequenceName(sequenceName), positionFrom(posFrom), positionTo(posTo) {
         if (posFrom > posTo) {
-            isReverseCompliment = true;
+            isReverseComplement = true;
             std::swap(positionFrom, positionTo);
         }
         else {
-            isReverseCompliment = false;
+            isReverseComplement = false;
         }
     }
 
@@ -62,16 +69,14 @@ struct PositionListEntry {
         return sequenceName == otherEntry.sequenceName &&
             modelName == otherEntry.modelName &&
             hasOverlap &&
-            isReverseCompliment == otherEntry.isReverseCompliment;
+            isReverseComplement == otherEntry.isReverseComplement;
     }
-
-
 
     std::string modelName;
     std::string sequenceName;
     uint64_t positionFrom;
     uint64_t positionTo;
-    bool isReverseCompliment;
+    bool isReverseComplement;
     bool located = false;
 };
 
@@ -80,24 +85,36 @@ struct PositionListEntry {
 //Private function prototypes
 void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
     std::string& posListSrc, NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
-    bool& checkBenchmarkSensitivity, bool& parsableBenchmark, std::string& hitsFileSrc);
+    NailForge::Alphabet& searchAlphabet);
 
 void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc,
     NailForge::Alphabet& alphabet, uint8_t& suffixArrayCompressionRatio);
 
 bool isPositiveExample(const P7Hmm& phmm, const FastaVector* fastaVector, const uint32_t sequenceIdx);
 
-bool isNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx);
+bool isAminoNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx);
 
-void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
-    const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedLiset,
-    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark);
+void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const std::string& posListSrc);
 
-void checkSensitivityTransmark(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
-    const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedLiset, const std::string& posList,
-    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark,
-    const uint8_t seedLen, const std::string& hitsFileSrc);
+void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedLiset, const std::string& posList,
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc);
 
+unique_ptr<vector<vector<PositionListEntry>>> getDnaPositionList(const std::string& positionListFileSrc, const P7HmmList& phmmList, const FastaVector& fastaVector);
+
+std::vector<std::vector<PositionListEntry>> filterDnaPositionLists(const std::vector<std::vector<PositionListEntry>> hmmerHits,
+    const std::vector<std::vector<PositionListEntry>> officialPositionList);
+
+void writeResultsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList, const std::string& hmmSrc, const std::string& fastaSrc);
+
+void writeHitsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList, const std::string& fastaSrc,
+    const std::string hmmSrc, const std::string& outputFileSrc);
+
+void writeAminoScoreList(std::vector<std::vector<NailForge::AlignmentSeed>>& seedList, const std::string& fastaSrc,
+    const std::string hmmSrc);
 
 int main(int argc, char** argv) {
     argparse::ArgumentParser parser("nailforgeBenchmark");
@@ -119,18 +136,14 @@ int main(int argc, char** argv) {
     searchCommand.add_argument("-t", "--thresholdScore").required().help("sets the threshold score in bits for the main diagonal hits.");
     searchCommand.add_argument("-x", "--extendedPValue").required().help("P-value for final extended score.");
     searchCommand.add_argument("-n", "--numThreads").help("sets the number of threads when openmp is used.");
-    searchCommand.add_argument("-b", "--benchmark").flag().help("benchmark the results for sensitivity");
-    searchCommand.add_argument("-B", "--benchmarkData").flag().help("show true positive, false positive results in a easy to parse format");
     searchCommand.add_argument("-p", "--posListSrc").help("file src for the list of real hit positions");
-    searchCommand.add_argument("-w", "--extensionWidth").required().help("width of the group of extensions to try");
-    searchCommand.add_argument("-H", "--hitsFile").help("file containing the hmmer hits to match against");
-
+    searchCommand.add_argument("-A", "--alphabet").required().help("sets the alphabet, necessary for determining how to parse the TP/FP rates");
     searchCommand.add_argument("-r", "--repeatFilterPartsPerMillion").required().help("float representing maximum number of awfm hits, "
         "in parts per million, before a hit is considered to be repetitive junk");
-    searchCommand.add_argument("-T", "--searchType").required().required().help("search type to perform. \n"
+    searchCommand.add_argument("-T", "--searchType").required().help("search type to perform. \n"
         "'s' for standard (amino acid and single strand search),\n "
         "'d' or 'b'. for dual-strand nucleotide search (not to be used with amino acid)\n"
-        "'c' for compliment strand only (not to be used with amino acid)");
+        "'c' for complement strand only (not to be used with amino acid)");
 
     parser.add_subparser(createCommand);
     parser.add_subparser(searchCommand);
@@ -158,37 +171,45 @@ int main(int argc, char** argv) {
         }
         std::cout << "fm index creation finished" << std::endl;
     }
-
     else if (parser.is_subcommand_used(searchCommand)) {
-        std::string fastaSrc, awfmSrc, hmmSrc, posListSrc, hitsFileSrc;
+        std::string fastaSrc, awfmSrc, hmmSrc, posListSrc;
         NailForge::SearchParams params;
         NailForge::SearchType searchType;
         uint8_t numThreads;
-        bool checkBenchmarkSensitivity, parsableBenchmark;
+        NailForge::Alphabet searchAlphabet;
+
         parseSearchOptions(searchCommand, fastaSrc, awfmSrc, hmmSrc, posListSrc, params, searchType,
-            numThreads, checkBenchmarkSensitivity, parsableBenchmark, hitsFileSrc);
+            numThreads, searchAlphabet);
 
-        std::vector<std::vector<NailForge::AlignmentSeed>> primarySeedList, complimentSeedList;
+        std::vector<std::vector<NailForge::AlignmentSeed>> primarySeedList, complementSeedList;
 
-
-        // std::cout << "filtering with hmm..." << std::endl;
         auto startTime = std::chrono::high_resolution_clock::now();
+        float searchTimeDuration = 0.0f;
         NailForge::ReturnCode nfrc = NailForge::filterWithHmmFile(hmmSrc.c_str(), fastaSrc.c_str(), awfmSrc.c_str(),
-            params, searchType, numThreads, primarySeedList, complimentSeedList);
-        auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-        const float secondsDuration = (float)duration.count() / 1000000.0f;
-
-        if (checkBenchmarkSensitivity || parsableBenchmark) {
-            if (isTransmark) {
-                checkSensitivityTransmark(primarySeedList, complimentSeedList, posListSrc, hmmSrc,
-                    fastaSrc, parsableBenchmark, params.maximumHitLength, hitsFileSrc);
-            }
-            else {
-                checkSensitivity(primarySeedList, complimentSeedList, hmmSrc, fastaSrc, parsableBenchmark);
-            }
+            params, searchType, numThreads, primarySeedList, complementSeedList, searchTimeDuration);
+        if (nfrc != NailForge::ReturnCode::Success) {
+            std::cerr << "unexpected error from filterWithHmm: " << NailForge::returnCodeDescription(nfrc) << std::endl;
         }
-        std::cout << "\t" << secondsDuration << std::endl;
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto fullRuntimeDuration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+        const float fullRuntimeDurationSeconds = (float)fullRuntimeDuration.count() / 1000000.0f;
+
+
+        std::cout << "done writing" << std::endl;
+        if (searchAlphabet == NailForge::Alphabet::Amino) {
+            checkAminoSensitivity(primarySeedList, hmmSrc, fastaSrc, posListSrc);
+        }
+        else {
+            checkDnaSensitivity(primarySeedList, complementSeedList, posListSrc, hmmSrc, fastaSrc);
+        }
+
+
+        std::cout << "\ttime (search): \t" << searchTimeDuration << "\t time(full)\t" << fullRuntimeDurationSeconds << std::endl;
+        
+        std::cout << "writing hits to file" << std::endl;
+        writeHitsToFile(primarySeedList, complementSeedList, fastaSrc, hmmSrc, "benchmarkHits.txt");
+        writeAminoScoreList(primarySeedList, fastaSrc, hmmSrc);
+        writeResultsToFile(primarySeedList, complementSeedList, hmmSrc, fastaSrc);
 
     }
     else {
@@ -248,7 +269,7 @@ void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
 
 void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
     std::string& posListSrc, NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
-    bool& checkBenchmarkSensitivity, bool& parsableBenchmark, std::string& hitsFileSrc) {
+    NailForge::Alphabet& searchAlphabet) {
     try {
         fastaSrc = parser.get<std::string>("-f");
     }
@@ -271,26 +292,20 @@ void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
         std::exit(-1);
     }
     try {
-        hitsFileSrc = parser.get<std::string>("-H");
-    }
-    catch (const std::exception& e) {
-        hitsFileSrc = "";
-    }
-    try {
         posListSrc = parser.get<std::string>("-p");
     }
     catch (const std::exception& e) {
         //nothing here, not all benchmarks have position list
     }
     try {
-        params.maximumHitLength = (uint8_t)std::stoi(parser.get<std::string>("-l"));
+        params.maximumHitLength = (uint32_t)std::stoi(parser.get<std::string>("-l"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get main diag length from parser " << std::endl;
         exit(-1);
     }
     try {
-        params.flankExtensionLength = (uint8_t)std::stoi(parser.get<std::string>("-e"));
+        params.flankExtensionLength = (uint32_t)std::stoi(parser.get<std::string>("-e"));
     }
     catch (const std::exception& e) {
         std::cerr << "could not get extension diag length from parser " << std::endl;
@@ -318,12 +333,6 @@ void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
         exit(-1);
     }
     try {
-        params.extentionGroupWidth = std::stoi(parser.get<std::string>("-w"));
-    }
-    catch (const std::exception& e) {
-        std::cerr << "could not parse extension group width from parser" << std::endl;
-    }
-    try {
         numThreads = (uint8_t)std::stoi(parser.get<std::string>("-n"));
     }
     catch (const std::exception& e) {
@@ -331,34 +340,39 @@ void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
         exit(-1);
     }
     try {
-        checkBenchmarkSensitivity = parser["-b"] == true;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "could not get benchmark flag from parser" << std::endl;
-        exit(-1);
-    }
-    try {
-        parsableBenchmark = parser["-B"] == true;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "could not get parsable benchmark flag from parser" << std::endl;
-        exit(-1);
-    }
-    try {
         std::string searchTypeString = parser.get<std::string>("-T");
         switch (std::tolower(searchTypeString[0])) {
         case 'p': case 'P': searchType = NailForge::SearchType::Standard;           break;
         case 's': case 'S': searchType = NailForge::SearchType::Standard;           break;
-        case 'c': case 'C': searchType = NailForge::SearchType::ComplimentStrand;   break;
+        case 'c': case 'C': searchType = NailForge::SearchType::ComplementStrand;   break;
         case 'b': case 'B': searchType = NailForge::SearchType::DualStrand;         break;
         case 'd': case 'D': searchType = NailForge::SearchType::DualStrand;         break;
         default:
-            std::cerr << "search type was not primary, compliment, or dual-strand" << std::endl;
+            std::cerr << "search type was not primary, complement, or dual-strand" << std::endl;
             exit(-1);
         }
     }
     catch (const std::exception& e) {
         std::cerr << "could not parse search type option from parser" << std::endl;
+        exit(-1);
+    }
+    try {
+        std::string searchAlphabetString = parser.get<std::string>("-A");
+        switch (std::tolower(searchAlphabetString[0])) {
+        case 'd':  searchAlphabet = NailForge::Alphabet::Dna;  break;
+        case 'r': searchAlphabet = NailForge::Alphabet::Rna;   break;
+        case 'a': searchAlphabet = NailForge::Alphabet::Amino; break;
+        default:
+            std::cerr << "search alphabet must be dna, rna, or amino." << std::endl;
+            exit(-1);
+        }
+        if (searchAlphabet == NailForge::Alphabet::Amino && searchType != NailForge::SearchType::Standard) {
+            std::cerr << "error, only Standard search type is supported for amino acid search" << std::endl;
+            exit(-1);
+        }
+    }
+    catch (const std::exception& e) {
+        std::cerr << "could not parse alphabet option" << std::endl;
         exit(-1);
     }
 }
@@ -370,27 +384,31 @@ bool isPositiveExample(const P7Hmm& phmm, const FastaVector* fastaVector, const 
     fastaVectorGetHeader(fastaVector, sequenceIdx, &headerPtr, &headerLen);
 
     char* modelName = phmm.header.name;
-    const auto nameLen = strlen(modelName);
 
-    if (headerLen < nameLen) {
-        return false;
-    }
-    const bool sequenceStartsWithModelName = strncmp(modelName, headerPtr, nameLen) == 0;
-    if (sequenceStartsWithModelName) {
-        if (headerLen > nameLen) {
-            return headerPtr[nameLen] == '/';
-        }
-        else {
-            return true;
-        }
-    }
-    else {
-        return false;
-    }
+    bool foundModelNameInHeader = std::string(modelName) == std::string(headerPtr).substr(0, std::string(headerPtr).find("/"));
+    return foundModelNameInHeader;
+    // const auto nameLen = strlen(modelName);
+
+    // if (headerLen < nameLen) {
+    //     return false;
+    // }
+    // const bool sequenceStartsWithModelName = strncmp(modelName, headerPtr, nameLen) == 0;
+    // if (sequenceStartsWithModelName) {
+    //     if (headerLen > nameLen) {
+    //         return headerPtr[nameLen] == '/';
+    //     }
+    //     else {
+    //         return true;
+    //     }
+    // }
+    // else {
+    //     return false;
+    // }
 
 }
 
-bool isNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx) {
+
+bool isAminoNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx) {
     size_t headerLen;
     char* headerPtr;
     fastaVectorGetHeader(fastaVector, sequenceIdx, &headerPtr, &headerLen);
@@ -404,9 +422,8 @@ bool isNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceId
     return strncmp("decoy", headerPtr, nameLen) == 0;
 }
 
-void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
-    const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedLiset,
-    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark) {
+void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const std::string& posListSrc) {
     uint64_t numSeeds = 0;
     for (const auto& list : primarySeedList) {
         numSeeds += list.size();
@@ -433,124 +450,90 @@ void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& 
 
     uint64_t numPositiveExamples = 0;
     uint64_t numNegativeExamples = 0;
-    uint64_t numPrimaryTruePositives = 0;
-    uint64_t numPrimaryFalsePositives = 0;
-    // uint64_t numComplimentTruePositives = 0;
-    // uint64_t numComplimentFalsePositives = 0;
+    uint64_t numTruePositives = 0;
+    uint64_t numFalsePositives = 0;
 
+    //find the number of negative examples
     for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
-        if (isNegativeExample(&fastaVector, sequenceIdx)) {
-            numNegativeExamples += phmmList.count;;
+        if (isAminoNegativeExample(&fastaVector, sequenceIdx)) {
+            numNegativeExamples += phmmList.count;
         }
     }
 
-
-    for (uint32_t modelIdx = 0;modelIdx < primarySeedList.size(); modelIdx++) {
-
-        for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
-            if (isPositiveExample(phmmList.phmms[modelIdx], &fastaVector, sequenceIdx)) {
-                numPositiveExamples++;
-                //check to see if this is represented in the seed list
-                for (const auto& seed : primarySeedList[modelIdx]) {
-                    if (seed.sequenceIdx == sequenceIdx) {
-                        numPrimaryTruePositives++;
-                        break;
-                    }
-                }
-            }
-        }
-
+    //find the false positives
+    for (uint32_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
         //count false positives
         for (const auto& seed : primarySeedList[modelIdx]) {
-            if (!isPositiveExample(phmmList.phmms[modelIdx], &fastaVector, seed.sequenceIdx)) {
-                numPrimaryFalsePositives++;
+            if (isAminoNegativeExample(&fastaVector, seed.sequenceIdx)) {
+                numFalsePositives++;
             }
         }
+    }
 
+    //find the positive examples and true positives
+    std::string line;
+
+    std::ifstream positionListFile(posListSrc);
+    while (std::getline(positionListFile, line)) {
+        if (line[0] != '#') {
+            numPositiveExamples++;
+            size_t stringPosition = line.find('/');
+            stringPosition++;
+            stringPosition = line.find('/', stringPosition);
+            const std::string sequenceName = line.substr(0, stringPosition + 1);
+
+            for (uint32_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
+                char* modelName = phmmList.phmms[modelIdx].header.name;
+
+                if (sequenceName.find(std::string(modelName)) != 0) {
+                    continue;
+                }
+
+                //find the index of the matching sequence
+                for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
+                    char* seqHeader;
+                    size_t seqHeaderLen;
+                    fastaVectorGetHeader(&fastaVector, sequenceIdx, &seqHeader, &seqHeaderLen);
+                    if (std::string(seqHeader).find(sequenceName) != std::string::npos) {
+                        for (const NailForge::AlignmentSeed& primarySeed : primarySeedList[modelIdx]) {
+                            if (primarySeed.sequenceIdx == sequenceIdx) {
+                                numTruePositives++;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+
+                }
+                break;//we've identified the model, we can skip the rest
+            }
+        }
     }
     if (numPositiveExamples == 0) {
         std::cout << "error, num pos examples was zero" << std::endl;
     }
 
-
-    const double primaryTruePositiveRate = static_cast<double>(numPrimaryTruePositives) / static_cast<double>(numPositiveExamples);
-    const double primaryFalsePositiveRate = static_cast<double>(numPrimaryFalsePositives) / static_cast<double>(numNegativeExamples);
-
-    if (parsableBenchmark) {
-        std::cout << primaryTruePositiveRate  << "\t" << primaryFalsePositiveRate  << "\t"; 
-        //<< complimentTruePositiveRate <<   "\t" << complimentFalsePositiveRate;
+    size_t numPrimarySeeds = 0;
+    for (const auto& primaryHit : primarySeedList) {
+        numPrimarySeeds += primaryHit.size();
     }
-    else {
-        // std::cout << "Primary TP " << numPrimaryTruePositives << " / " << numPositiveExamples <<
-        //     " (" << primaryTruePositiveRate * 100 << "%),\tFP " << numPrimaryFalsePositives << " / " << numNegativeExample <<
-        //     " (" << primaryFalsePositiveRate * 100 << "%)\n\tCompliment TP " << numComplimentTruePositives << " / " << numPositiveExamples <<
-        //     " (" << complimentTruePositiveRate * 100 << "%),\tFP " << numComplimentFalsePositives << " / " << numNegativeExample <<
-        //     " (" << complimentFalsePositiveRate * 100 << "%)" << std::endl;
-    }
+    const double primaryTruePositiveRate = static_cast<double>(numTruePositives) / static_cast<double>(numPositiveExamples);
+    const double primaryFalsePositiveRate = static_cast<double>(numFalsePositives) / static_cast<double>(numNegativeExamples);
 
-
-
+    std::cout << "#primary hits: " << numPrimarySeeds << "\t";
+    std::cout << "TP:\t" << numTruePositives << "/" << numPositiveExamples << "\t(" << primaryTruePositiveRate << ")\tFP:\t" <<
+        numFalsePositives << "/" << numNegativeExamples << "\t(" << primaryFalsePositiveRate << ")";
     fastaVectorDealloc(&fastaVector);
     p7HmmListDealloc(&phmmList);
 }
 
-void checkSensitivityTransmark(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
-    const std::vector<std::vector<NailForge::AlignmentSeed>>& complimentSeedList, const std::string& posListSrc,
-    const std::string& hmmFileSrc, const std::string& fastaFileSrc, const bool parsableBenchmark,
-    const uint8_t seedLen, const std::string& hitsFileSrc) {
+void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList, const std::string& posListSrc,
+    const std::string& hmmFileSrc, const std::string& fastaFileSrc) {
 
     //make the position list
     std::ifstream positionStream(posListSrc);
     std::string line;
-    std::vector<PositionListEntry> positionList;
-    while (std::getline(positionStream, line)) {
-        try {
-            positionList.emplace_back(line);
-
-        }
-        catch (const std::exception& e) {
-            std::cout << "ERROR on emplace " << e.what() << std::endl;
-        }
-    }
-
-    //filter hits out off they're not in the hmmer --max hit list
-    std::vector<PositionListEntry> hmmerHits;
-    std::ifstream hitsStream(hitsFileSrc);
-    while (std::getline(hitsStream, line)) {
-        if (line[0] != '#') {
-            std::istringstream lineStream(line);
-            std::string modelName, sequenceName, modelNameLine;
-            uint64_t positionFrom, positionTo;
-            std::string tmp;
-
-            lineStream >> sequenceName;
-            lineStream >> tmp;
-            lineStream >> modelNameLine;
-            std::istringstream modelNameStream(modelNameLine);
-            std::getline(modelNameStream, tmp, '.');
-            modelNameStream >> modelName;
-
-            lineStream >> tmp;
-            lineStream >> tmp;
-            lineStream >> tmp;
-            lineStream >> tmp;
-            positionFrom = std::stoi(tmp);
-            lineStream >> tmp;
-            positionTo = std::stoi(tmp);
-
-            hmmerHits.emplace_back(modelName, sequenceName, positionFrom, positionTo);
-        }
-    }
-
-    std::vector<PositionListEntry> filteredEntryList;
-    for (const auto& position : positionList) {
-        for (const auto& hmmerHit : hmmerHits) {
-            if (position == hmmerHit) {
-                filteredEntryList.push_back(position);
-                break;
-            }
-        }
-    }
 
 
     FastaVector fastaVector;
@@ -572,94 +555,447 @@ void checkSensitivityTransmark(const std::vector<std::vector<NailForge::Alignmen
     }
 
 
+    const unique_ptr<vector<vector<PositionListEntry>>> positionList = getDnaPositionList(posListSrc, phmmList, fastaVector);
+
+
+    double numImpliedSequences = 0.0f;
     uint64_t numPrimaryTruePositives = 0;
-    uint64_t numComplimentTruePositives = 0;
+    uint64_t numComplementTruePositives = 0;
+    uint64_t numPrimaryFalsePositives = 0;
+    uint64_t numComplementFalsePositives = 0;
     uint64_t numPrimaryPositiveExamples = 0;
-    uint64_t numComplimentPositiveExamples = 0;
-    uint64_t numPrimarySeedsFromAllModels = 0;
-    uint64_t numComplimentSeedsFromAllModels = 0;
-    uint64_t numImpliedSequences = 0;
+    uint64_t numComplementPositiveExamples = 0;
+    uint64_t numNegativeExamples = 0;
 
+
+    uint64_t numPosNotFound = 0;
+    //primary strand count true positives
     for (uint64_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
-        numImpliedSequences += (fastaVector.sequence.count / phmmList.phmms[modelIdx].header.modelLength);
-        numPrimarySeedsFromAllModels += primarySeedList[modelIdx].size();
-        numComplimentSeedsFromAllModels += complimentSeedList[modelIdx].size();
+        //this seems hackish and difficult to explain, can we do better?
+        numImpliedSequences += static_cast<double>(fastaVector.sequence.count) /
+            static_cast<double>(phmmList.phmms[modelIdx].header.modelLength);
 
-        const uint32_t modelLength = phmmList.phmms[modelIdx].header.modelLength;
-        const char* modelName = phmmList.phmms[modelIdx].header.name;
-        std::vector<PositionListEntry> thisModelsPrimaryEntries;
-        std::vector<PositionListEntry> thisModelComplimentEntries;
+        const auto& posList = *positionList;
+        const auto& modPosList = posList[modelIdx];
+        for (const auto& position : modPosList) {
+            bool foundPosition = false;
+            if (position.isReverseComplement) {
+                continue;
+            }
+            for (const auto& nailHit : primarySeedList[modelIdx]) {
+                char* seqName;
+                uint64_t seqNameLen;
+                fastaVectorGetHeader(&fastaVector, nailHit.sequenceIdx, &seqName, &seqNameLen);
+                bool sequencesMatch = std::strcmp(seqName, position.sequenceName.c_str()) == 0;
+                bool hasOverlap = std::max((int64_t)position.positionFrom, std::max((int64_t)nailHit.sequencePosition-128,(int64_t)0 )) <=
+                    std::min((int64_t)position.positionTo, (int64_t)nailHit.sequencePosition + 128);
 
-        //get only the real hits that correspond to this model.
-        std::copy_if(filteredEntryList.begin(), filteredEntryList.end(), std::back_inserter(thisModelsPrimaryEntries),
-            [&](PositionListEntry& p) {return std::strcmp((modelNamePrefix + p.modelName).c_str(), modelName) == 0 && !p.isReverseCompliment;});
-        std::copy_if(filteredEntryList.begin(), filteredEntryList.end(), std::back_inserter(thisModelComplimentEntries),
-            [&](PositionListEntry& p) {return std::strcmp((modelNamePrefix + p.modelName).c_str(), modelName) == 0 && p.isReverseCompliment;});
+                // nailHit.sequencePosition >= position.positionFrom && nailHit.sequencePosition <= position.positionTo;
+                bool seedMatchesActualPosition = sequencesMatch && hasOverlap;
+                if (seedMatchesActualPosition) {
+                    numPrimaryTruePositives++;
+                    foundPosition = true;
+                    break;
+                }
+            }
+            if(!foundPosition){
+                numPosNotFound++;
+                std::cout << "couldn't find position :"<< position.sequenceName<<"\t"<<position.modelName<<"\t"<< position.positionFrom << "\t"<<position.positionTo<< "\t"<<position.isReverseComplement << std::endl; 
+            }
 
-        numPrimaryPositiveExamples += thisModelsPrimaryEntries.size();
-        numComplimentPositiveExamples += thisModelComplimentEntries.size();
+        }
+    }
+    std::cout << "couldn't find "<< numPosNotFound<<" positions"<<std::endl;
 
-        for (auto& positionEntry : thisModelsPrimaryEntries) {
-
-            for (const auto seed : primarySeedList[modelIdx]) {
-                char* seqHeader;
-                uint64_t headerLen;
-                fastaVectorGetHeader(&fastaVector, seed.sequenceIdx, &seqHeader, &headerLen);
-                if (strcmp(positionEntry.sequenceName.c_str(), seqHeader) == 0) {
-                    //check the positions
-                    const uint64_t seedEndPos = seed.sequencePosition + seedLen;
-                    bool hasOverlap = std::max(seed.sequencePosition, positionEntry.positionFrom) <=
-                        std::min(seedEndPos, positionEntry.positionTo);
-                    if (hasOverlap) {
-                        positionEntry.located = true;
-                    }
+    //complementStrand count true positives
+    for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+        auto& posListForModel = (*positionList)[modelIdx];
+        for (auto& position : posListForModel) {
+            if (!position.isReverseComplement) {
+                continue;
+            }
+            for (const auto& nailHit : complementSeedList[modelIdx]) {
+                char* seqName;
+                uint64_t seqNameLen;
+                fastaVectorGetHeader(&fastaVector, nailHit.sequenceIdx, &seqName, &seqNameLen);
+                bool sequencesMatch = std::strcmp(seqName, position.sequenceName.c_str()) == 0;
+                bool hasOverlap = nailHit.sequencePosition >= position.positionFrom && nailHit.sequencePosition <= position.positionTo;
+                bool seedMatchesActualPosition = sequencesMatch && hasOverlap;
+                if (seedMatchesActualPosition) {
+                    numComplementTruePositives++;
+                    break;
                 }
             }
         }
-
-        for (auto& positionEntry : thisModelComplimentEntries) {
-
-            for (const auto seed : complimentSeedList[modelIdx]) {
-                char* seqHeader;
-                uint64_t headerLen;
-                fastaVectorGetHeader(&fastaVector, seed.sequenceIdx, &seqHeader, &headerLen);
-                if (strcmp(positionEntry.sequenceName.c_str(), seqHeader) == 0) {
-                    //check the positions
-                    const uint64_t seedEndPos = seed.sequencePosition + seedLen;
-                    bool hasOverlap = std::max(seed.sequencePosition, positionEntry.positionFrom) <=
-                        std::min(seedEndPos, positionEntry.positionTo);
-                    if (hasOverlap) {
-                        positionEntry.located = true;
-                    }
-                }
-            }
-        }
-        const auto thisModelPrimaryTruePositives = std::count_if(thisModelsPrimaryEntries.begin(), thisModelsPrimaryEntries.end(),
-            [](PositionListEntry& p) {return p.located;});
-        numPrimaryTruePositives += thisModelPrimaryTruePositives;
-        const auto thisModelComplimentTruePositives = std::count_if(thisModelComplimentEntries.begin(), thisModelComplimentEntries.end(),
-            [](PositionListEntry& p) {return p.located;});
-        numComplimentTruePositives += thisModelComplimentTruePositives;
     }
 
-    const uint64_t numPrimaryFalsePositives = numPrimarySeedsFromAllModels - numPrimaryTruePositives;
-    const uint64_t numComplimentFalsePositives = numComplimentSeedsFromAllModels - numComplimentTruePositives;
+
+    //count primary false positives
+    for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+        for (const auto& nailHit : primarySeedList[modelIdx]) {
+            bool foundCorrespondingHit = false;
+            bool matchesAgainstAnotherModel = false;
+            for (const auto& position : (*positionList)[modelIdx]) {
+                char* seqName;
+                uint64_t seqNameLen;
+                fastaVectorGetHeader(&fastaVector, nailHit.sequenceIdx, &seqName, &seqNameLen);
+                bool sequencesMatch = std::strcmp(seqName, position.sequenceName.c_str()) == 0;
+                bool hasOverlap = nailHit.sequencePosition >= position.positionFrom && nailHit.sequencePosition <= position.positionTo;
+                if (sequencesMatch && hasOverlap && !position.isReverseComplement) {
+                    foundCorrespondingHit = true;
+                    break;
+                }
+                else if (sequencesMatch && hasOverlap) {
+                    matchesAgainstAnotherModel = true;
+                }
+            }
+            if (!foundCorrespondingHit && !matchesAgainstAnotherModel) {
+                numPrimaryFalsePositives++;
+            }
+        }
+    }
+
+    //count complement false positives
+    for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+        for (const auto& nailHit : complementSeedList[modelIdx]) {
+            bool foundCorrespondingHit = false;
+            for (const auto& position : (*positionList)[modelIdx]) {
+                char* seqName;
+                uint64_t seqNameLen;
+                fastaVectorGetHeader(&fastaVector, nailHit.sequenceIdx, &seqName, &seqNameLen);
+                bool sequencesMatch = std::strcmp(seqName, position.sequenceName.c_str()) == 0;
+                bool hasOverlap = nailHit.sequencePosition >= position.positionFrom && nailHit.sequencePosition <= position.positionTo;
+                if (sequencesMatch && hasOverlap && position.isReverseComplement) {
+                    foundCorrespondingHit = true;
+                    break;
+                }
+            }
+            if (!foundCorrespondingHit) {
+                numComplementFalsePositives++;
+            }
+        }
+    }
+
+    //count primary/complement positive examples
+    for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+        for (const auto& position : (*positionList)[modelIdx]) {
+            if (position.isReverseComplement) {
+                numComplementPositiveExamples++;
+            }
+            else {
+                numPrimaryPositiveExamples++;
+            }
+        }
+    }
+
+
+    //count number of negative examples
+    for (uint64_t modelIdx = 0; modelIdx < phmmList.count; modelIdx++) {
+        numNegativeExamples += (fastaVector.sequence.count / phmmList.phmms[modelIdx].header.modelLength);
+    }
+
+    std::cout << "fasta len: " << fastaVector.sequence.count << std::endl;
+
     const double primaryTpRate = static_cast<double>(numPrimaryTruePositives) / static_cast<double>(numPrimaryPositiveExamples);
-    const double complimentTpRate = static_cast<double>(numComplimentTruePositives) / static_cast<double>(numComplimentPositiveExamples);
-    const double primaryFpRate = static_cast<double>(numPrimaryFalsePositives) / static_cast<double>(numImpliedSequences - numPrimaryTruePositives);
-    const double complimentFpRate = static_cast<double>(numComplimentFalsePositives) / static_cast<double>(numImpliedSequences - numComplimentTruePositives);
+    const double complementTpRate = static_cast<double>(numComplementTruePositives) / static_cast<double>(numComplementPositiveExamples);
+    const double primaryFpRate = static_cast<double>(numPrimaryFalsePositives) / static_cast<double>(numImpliedSequences - numPrimaryPositiveExamples);
+    const double complementFpRate = static_cast<double>(numComplementFalsePositives) / static_cast<double>(numImpliedSequences - numComplementPositiveExamples);
 
-    if (parsableBenchmark) {
-        std::cout << primaryTpRate << "\t" << primaryFpRate << "\t" << complimentTpRate <<
-            "\t" << complimentFpRate;
+    std::cout << "PTP:\t" << primaryTpRate << "\tPFP:\t" << primaryFpRate << "\tCTP:\t" << complementTpRate <<
+        "\tCFP:\t" << complementFpRate << "\n";
+    std::cout << "PTP:\t" << numPrimaryTruePositives << "/" << numPrimaryPositiveExamples <<
+        "\tPFP:\t" << numPrimaryFalsePositives << "/" << numImpliedSequences - numPrimaryPositiveExamples <<
+        "\tCTP:\t" << numComplementTruePositives << "/" << numComplementPositiveExamples <<
+        "\tCFP:\t" << numComplementFalsePositives << "/" << numImpliedSequences - numComplementPositiveExamples << std::endl;
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);
+}
+
+unique_ptr<vector<vector<PositionListEntry>>> getDnaPositionList(const std::string& positionListFileSrc, const P7HmmList& phmmList, const FastaVector& fastaVector) {
+    auto entryList = std::make_unique<vector<vector<PositionListEntry>>>();
+    entryList->resize(phmmList.count);
+
+    std::ifstream fileStream(positionListFileSrc);
+    std::string line;
+    while (std::getline(fileStream, line)) {
+        std::istringstream lineStream(line);
+        std::string modelLine, modelName, sequenceName, tmp;
+        uint64_t positionFrom, positionTo;
+
+        lineStream >> modelLine;
+        std::istringstream modelStream(modelLine);
+        std::getline(modelStream, modelName, '/');
+
+        lineStream >> sequenceName;
+        lineStream >> tmp;
+        lineStream >> tmp;
+        positionFrom = std::stoi(tmp);
+        lineStream >> tmp;
+        positionTo = std::stoi(tmp);
+
+
+        for (uint32_t seqIdx = 0; seqIdx < fastaVector.metadata.count; seqIdx++) {
+            size_t seqHeaderLen;
+            char* seqHeader;
+            fastaVectorGetHeader(&fastaVector, seqIdx, &seqHeader, &seqHeaderLen);
+
+            if (std::string(seqHeader).starts_with(sequenceName)) {
+
+                //find the model idx
+                bool foundMatch = false;
+                for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
+                    if (std::string(phmmList.phmms[modelIdx].header.name).ends_with(modelName)) {
+                        foundMatch = true;
+                        std::string seqNameCopy = sequenceName;
+                        (*entryList)[modelIdx].emplace_back(modelName, seqNameCopy, positionFrom, positionTo);
+                        break;
+                    }
+                }
+                if (!foundMatch) {
+                    std::cout << "unable to find match!" << std::endl;
+                }
+
+                break;
+            }
+        }
     }
-    else {
-        std::cout << "Primary TP rate" << primaryTpRate * 100.0f << "%\t Primary FP rate " <<
-            primaryFpRate * 100.0f << "%\tCompliment TP rate " << complimentTpRate * 100.0f <<
-            "%\t Compliment FP rate" << complimentFpRate * 100.0f << "%" << std::endl;
+    return entryList;
+}
+
+std::vector<std::vector<PositionListEntry>> filterDnaPositionLists(const std::vector<std::vector<PositionListEntry>> hmmerHits,
+    const std::vector<std::vector<PositionListEntry>> officialPositionList) {
+
+    std::vector<std::vector<PositionListEntry>> filteredEntries;
+    filteredEntries.resize(officialPositionList.size());
+    for (uint32_t modelIdx = 0; modelIdx < officialPositionList.size();modelIdx++) {
+        for (const auto& officialPosition : officialPositionList[modelIdx]) {
+            for (const auto& hmmerHit : hmmerHits[modelIdx]) {
+                if (officialPosition == hmmerHit) {
+                    filteredEntries[modelIdx].push_back(officialPosition);
+                    break;
+                }
+            }
+        }
+    }
+    return filteredEntries;
+}
+
+
+void writeResultsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList,
+    const std::string& hmmSrc, const std::string& fastaSrc) {
+
+    FastaVector fastaVector;
+    FastaVectorReturnCode fvrc = fastaVectorInit(&fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not init fasta vector in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    fvrc = fastaVectorReadFasta(fastaSrc.c_str(), &fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not read fasta in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    P7HmmList phmmList;
+    P7HmmReturnCode phrc = readP7Hmm(hmmSrc.c_str(), &phmmList);
+    if (phrc != p7HmmSuccess) {
+        std::cerr << "Error: could not read phmm file in sensitivity check" << std::endl;
+        exit(-1);
+    }
+
+    std::ofstream resultsFileStream;
+    resultsFileStream.open("benchmarkResults.txt", std::ios::out);
+    resultsFileStream << "#seqName\tmodelName\tseqPosition\tmodelPostiion\tscore\tisComplement\n";
+
+
+    for (size_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
+        //get the model name
+        const char* modelName = phmmList.phmms[modelIdx].header.name;
+        for (const auto& primaryHit : primarySeedList[modelIdx]) {
+            char* sequenceName;
+            size_t seqNameLength;
+            fastaVectorGetHeader(&fastaVector, primaryHit.sequenceIdx, &sequenceName, &seqNameLength);
+            std::string stringSeqName = std::string(sequenceName);
+            stringSeqName = stringSeqName.substr(0, stringSeqName.find(' '));
+            resultsFileStream << stringSeqName;
+            resultsFileStream << "\t";
+            resultsFileStream << modelName;
+            resultsFileStream << "\t";
+            resultsFileStream << primaryHit.sequencePosition;
+            resultsFileStream << "\t";
+            resultsFileStream << primaryHit.modelPosition;
+            resultsFileStream << "\t";
+            resultsFileStream << primaryHit.fullScore;
+            resultsFileStream << "\t";
+
+            resultsFileStream << "0\n";
+        }
+
+        for (const auto& complementHit : complementSeedList[modelIdx]) {
+            char* sequenceName;
+            size_t seqNameLength;
+            fastaVectorGetHeader(&fastaVector, complementHit.sequenceIdx, &sequenceName, &seqNameLength);
+            resultsFileStream << sequenceName;
+            resultsFileStream << "\t";
+            resultsFileStream << modelName;
+            resultsFileStream << "\t";
+            resultsFileStream << complementHit.sequencePosition;
+            resultsFileStream << "\t";
+            resultsFileStream << complementHit.modelPosition;
+            resultsFileStream << "\t";
+            resultsFileStream << complementHit.fullScore;
+            resultsFileStream << "\t";
+            resultsFileStream << "1\n";
+        }
     }
 
     fastaVectorDealloc(&fastaVector);
     p7HmmListDealloc(&phmmList);
+}
 
+
+void writeHitsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList, const std::string& fastaSrc,
+    const std::string hmmSrc, const std::string& outputFileSrc) {
+
+    FastaVector fastaVector;
+    FastaVectorReturnCode fvrc = fastaVectorInit(&fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not init fasta vector in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    fvrc = fastaVectorReadFasta(fastaSrc.c_str(), &fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not read fasta in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    P7HmmList phmmList;
+    P7HmmReturnCode phrc = readP7Hmm(hmmSrc.c_str(), &phmmList);
+    if (phrc != p7HmmSuccess) {
+        std::cerr << "Error: could not read phmm file in sensitivity check" << std::endl;
+        exit(-1);
+    }
+
+    std::ofstream outputStream;
+    outputStream.open(outputFileSrc, std::ios::out);
+
+    for (uint32_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
+        char* modelName = phmmList.phmms[modelIdx].header.name;
+        char* seqName;
+        size_t seqNameLen;
+        for (const auto& primarySeed : primarySeedList[modelIdx]) {
+            fastaVectorGetHeader(&fastaVector, primarySeed.sequenceIdx, &seqName, &seqNameLen);
+
+            std::string stringSeqName = std::string(seqName);
+            const auto firstSpaceIdx = stringSeqName.find(" ");
+            std::string shortenedSeqName = stringSeqName.substr(0, firstSpaceIdx);
+
+            outputStream << "!!!\t" << shortenedSeqName << "\t" << "TRAIN." << modelName << "\t" <<
+                primarySeed.sequencePosition << "\t" << primarySeed.sequencePosition + 10 << "\n";
+        }
+        for (const auto& complementSeed : complementSeedList[modelIdx]) {
+            fastaVectorGetHeader(&fastaVector, complementSeed.sequenceIdx, &seqName, &seqNameLen);
+            std::string stringSeqName = std::string(seqName);
+            const auto firstSpaceIdx = stringSeqName.find(" ");
+            std::string shortenedSeqName = stringSeqName.substr(0, firstSpaceIdx);
+            outputStream << "!!!\t" << shortenedSeqName << "\t" << "TRAIN." << modelName << "\t" <<
+                complementSeed.sequencePosition + 10 << "\t" << complementSeed.sequencePosition << "\n";
+        }
+    }
+    outputStream.close();
+
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);
+}
+
+
+struct ScoreEntry {
+    ScoreEntry(const float score, const bool isTP, const bool isFP) :
+        score(score), isTP(isTP), isFP(isFP) {}
+    float score;
+    bool isTP;
+    bool isFP;
+};
+
+void writeAminoScoreList(std::vector<std::vector<NailForge::AlignmentSeed>>& seedList, const std::string& fastaSrc,
+    const std::string hmmSrc) {
+    FastaVector fastaVector;
+    FastaVectorReturnCode fvrc = fastaVectorInit(&fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not init fasta vector in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    fvrc = fastaVectorReadFasta(fastaSrc.c_str(), &fastaVector);
+    if (fvrc != FASTA_VECTOR_OK) {
+        std::cerr << "Error: could not read fasta in sensitivity check" << std::endl;
+        exit(-1);
+    }
+    P7HmmList phmmList;
+    P7HmmReturnCode phrc = readP7Hmm(hmmSrc.c_str(), &phmmList);
+    if (phrc != p7HmmSuccess) {
+        std::cerr << "Error: could not read phmm file in sensitivity check" << std::endl;
+        exit(-1);
+    }
+
+    //set a false boolean for each sequence
+    std::vector<bool> sequenceHasBeenSeenList;
+    sequenceHasBeenSeenList.resize(fastaVector.metadata.count);
+    std::fill(sequenceHasBeenSeenList.begin(), sequenceHasBeenSeenList.end(), false);
+
+    std::vector<ScoreEntry> scoreEntryList;
+
+    for (uint32_t modelIdx = 0; modelIdx < seedList.size();modelIdx++) {
+        const std::string seedModelName = std::string(phmmList.phmms[modelIdx].header.name);
+
+        for (const auto seed : seedList[modelIdx]) {
+
+            bool weveSeenAHitInThisSequence = sequenceHasBeenSeenList[seed.sequenceIdx];
+            char* seqName;
+            size_t seqNameLen;
+            fastaVectorGetHeader(&fastaVector, seed.sequenceIdx, &seqName, &seqNameLen);
+            float score = seed.fullScore;
+            bool isTP = false;
+            bool isFP = false;
+            if (std::string(seqName).starts_with(seedModelName) && !weveSeenAHitInThisSequence) {
+                sequenceHasBeenSeenList[seed.sequenceIdx] = true;
+                isTP = true;
+            }
+            else if (std::string(seqName).starts_with("decoy")) {
+                isFP = true;
+            }
+            scoreEntryList.emplace_back(score, isTP, isFP);
+        }
+
+    }
+    std::sort(scoreEntryList.begin(), scoreEntryList.end(), [](const ScoreEntry& e1, const ScoreEntry& e2) {
+        return e1.score > e2.score;
+        });
+
+    std::cout << "sorted score data:" << std::endl;
+    size_t numTP = 0;
+    size_t numFP = 0;
+    std::vector<uint32_t> xList;
+    std::vector<uint32_t> yList;
+    for (const auto& entry : scoreEntryList) {
+        if (entry.isTP) {
+            numTP++;
+        }
+        else if (entry.isFP) {
+            numFP++;
+        }
+        yList.push_back(numTP);
+        xList.push_back(numFP);
+    }
+
+    std::ofstream outStream;
+    outStream.open("fig1Data.txt");
+    for (uint32_t entryPosition = 0; entryPosition < scoreEntryList.size();entryPosition++) {
+        outStream << yList[entryPosition] << "\t" << xList[entryPosition] << std::endl;
+    }
+    outStream.close();
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);
 }
