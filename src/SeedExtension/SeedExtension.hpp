@@ -16,6 +16,14 @@ namespace NailForge::SeedExtension {
         bool isVerified;
     };
 
+    struct ScoreLengthTuple {
+        ScoreLengthTuple() {}
+        ScoreLengthTuple(const float score, const uint32_t length) :
+            score(score), length(length) {}
+        float score;
+        uint32_t length;
+    };
+
     /// @brief Verifies a hit from the String Tree by extending the flanking regions of the diagonal to attempt to pass the final threshold score
     /// @param context String Tree search context data
     /// @param hitPosition position of the hit
@@ -32,15 +40,15 @@ namespace NailForge::SeedExtension {
     /// @param context string tree search context data
     /// @param hitPosition position of the hit in model/sequence space
     /// @param isPriorFlank determines if the computation should be looking at the prior flank or post flank
-    /// @return score of the flanking region. This does not include the original diagonal's score.
+    /// @return score of the flanking region, and how long the flank was. This does not include the original diagonal's score.
     template<bool isReverseComplement>
-    float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
-        const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept;
+    ScoreLengthTuple findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
+        const StringTree::HitPosition& hitPosition, const float thresholdScore, const bool isPriorFlank) noexcept;
 
 
     template<bool isReverseComplement>
-    float findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
-        const StringTree::HitPosition& hitPosition, const bool isPriorFlank) noexcept {
+    ScoreLengthTuple findFlankingDiag(const char* sequencePtr, const uint64_t sequenceLength, const StringTree::Context& context,
+        const StringTree::HitPosition& hitPosition, const float thresholdScore, const bool isPriorFlank) noexcept {
 
         const uint8_t symbolEncodingComplementBitmask = isReverseComplement ? 0x03 : 0x00;
         const NailForge::Alphabet alphabet = context.phmm.header.alphabet == P7HmmReaderAlphabetAmino ?
@@ -93,11 +101,16 @@ namespace NailForge::SeedExtension {
 
             accumulatedScore += matchScore;
             maxAccumulatedScore = std::max(maxAccumulatedScore, accumulatedScore);
-            if(accumulatedScore < -10.0f){
-                return maxAccumulatedScore;
+            //here, we are killing the flank accumulation if the flank's accumulated score goes below -1*threshold.
+            //the assumption here is that a flank this bad would require the threshold to be hit by the main diag and the
+            //other flank, without any contribution from this flank. I think that flanks could probably be killed much earlier,
+            //but I haven't done any analysis to find a good place to kill it.
+            //note that the *max* accumulated score is returned, so this can be positive even if the flank is killed in this way.
+            if (__builtin_expect(accumulatedScore < (-thresholdScore), false)) {
+                return ScoreLengthTuple(maxAccumulatedScore, flankPosition);
             }
         }
-        return maxAccumulatedScore;
+        return ScoreLengthTuple(maxAccumulatedScore, flankLength);
     }
 }
 

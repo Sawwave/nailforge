@@ -19,20 +19,23 @@ namespace NailForge::SeedExtension {
             return ExtensionResult(0, false);
         }
 
-        const float extensionThresholdScore = PhmmProcessor::findThreshold(context.phmm,
+        const float thresholdScore = PhmmProcessor::findThreshold(context.phmm,
             context.searchParams.extensionPValue, sequenceLength);
 
-        float priorFlankScore, postFlankScore;
+        //The scoreLengthTuples also contain the flank lengths, but they aren't being used. Future developers
+        //might just change this back to returning the score from findFlankingDiag()
+        ScoreLengthTuple priorFlankScoreLength, postFlankScoreLength;
         if (context.isReverseComplement) {
-            priorFlankScore = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, true);
-            postFlankScore = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, false);
+            priorFlankScoreLength = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, thresholdScore, true);
+            postFlankScoreLength = findFlankingDiag<true>(sequencePtr, sequenceLength, context, hitPosition, thresholdScore, false);
         }
         else {
-            priorFlankScore = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, true);
-            postFlankScore = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, false);
+            priorFlankScoreLength = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, thresholdScore, true);
+            postFlankScoreLength = findFlankingDiag<false>(sequencePtr, sequenceLength, context, hitPosition, thresholdScore, false);
         }
 
-        const float finalScore = priorFlankScore + postFlankScore + maxScoreAlongDiagonal;
-        return ExtensionResult(finalScore, finalScore >= extensionThresholdScore);
+        const float finalScore = priorFlankScoreLength.score + postFlankScoreLength.score + maxScoreAlongDiagonal;
+
+        return ExtensionResult(finalScore, finalScore >= thresholdScore);
     }
 }
