@@ -28,8 +28,8 @@ namespace NailForge {
         float mainDiagonalThresholdScore;
         float extensionPValue;
         float maxSeqHitsPerMillion;
-        uint8_t maximumHitLength;
-        uint8_t flankExtensionLength;
+        uint32_t maximumHitLength;
+        uint32_t flankExtensionLength;
         static SearchParams defaultParams(const NailForge::Alphabet alphabet) {
             SearchParams searchParams;
             if (alphabet == NailForge::Alphabet::Amino) {
