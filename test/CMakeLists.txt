@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.26)
 project(nailforgeBenchmark)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 add_executable(nailforgeBenchmark
+    ../src/PhmmProcessor/PhmmProcessor.cpp
+    ../src/Alphabet/LetterConversion.cpp
     benchmark.cpp
 )
 
-
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -O0 -g -fsanitize=address  -Wextra -march=native")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g -Wextra -fsanitize=address  -Wall") #Debug Flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wextra  -Wall -march=native -fno-math-errno -fno-trapping-math") 
 
 target_include_directories(nailforgeBenchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/)
 
