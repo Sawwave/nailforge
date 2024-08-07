@@ -2,6 +2,8 @@
 #include "../argparse/include/argparse/argparse.hpp"
 #include "../src/PhmmProcessor/PhmmProcessor.hpp"
 #include "../src/Alphabet/LetterConversion.hpp"
+#include "../src/PhmmProcessor/PhmmProcessor.hpp"
+#include "../src/Alphabet/LetterConversion.hpp"
 #include <cctype>
 #include <string>
 #include <cstring>
@@ -12,10 +14,22 @@
 #include <fstream>
 #include <cmath>
 #include <optional>
+#include <map>
 
 using std::vector;
 using std::string;
 using std::unique_ptr;
+
+
+bool starts_with(const std::string& seqHeader, const std::string& prefix) {
+    return seqHeader.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool ends_with(const std::string& str, const std::string& suffix) {
+    if (suffix.size() > str.size()) return false;
+    return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin());
+}
+
 
 const std::string modelNamePrefix = "TRAIN.";
 
@@ -85,7 +99,7 @@ struct PositionListEntry {
 //Private function prototypes
 void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
     std::string& posListSrc, NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
-    NailForge::Alphabet& searchAlphabet);
+    NailForge::Alphabet& searchAlphabet, std::string& sortedHitsFileSrc);
 
 void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc,
     NailForge::Alphabet& alphabet, uint8_t& suffixArrayCompressionRatio);
@@ -94,10 +108,10 @@ bool isPositiveExample(const P7Hmm& phmm, const FastaVector* fastaVector, const 
 
 bool isAminoNegativeExample(const FastaVector* fastaVector, const uint32_t sequenceIdx);
 
-void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
     const std::string& hmmFileSrc, const std::string& fastaFileSrc, const std::string& posListSrc);
 
-void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+void checkSensitivityWithPosFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
     const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedLiset, const std::string& posList,
     const std::string& hmmFileSrc, const std::string& fastaFileSrc);
 
@@ -115,6 +129,11 @@ void writeHitsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& p
 
 void writeAminoScoreList(std::vector<std::vector<NailForge::AlignmentSeed>>& seedList, const std::string& fastaSrc,
     const std::string hmmSrc);
+
+void sortNailForgeHits(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::string& fastaSrc, const std::string& hmmSrc, const std::string& sortedHitsFileSrc);
+
+void findKmerScoreThreshold(argparse::ArgumentParser& parser);
 
 int main(int argc, char** argv) {
     argparse::ArgumentParser parser("nailforgeBenchmark");
@@ -138,6 +157,7 @@ int main(int argc, char** argv) {
     searchCommand.add_argument("-n", "--numThreads").help("sets the number of threads when openmp is used.");
     searchCommand.add_argument("-p", "--posListSrc").help("file src for the list of real hit positions");
     searchCommand.add_argument("-A", "--alphabet").required().help("sets the alphabet, necessary for determining how to parse the TP/FP rates");
+    searchCommand.add_argument("-S", "--sortedHitsFile").help("sets the sorted hits file src");
     searchCommand.add_argument("-r", "--repeatFilterPartsPerMillion").required().help("float representing maximum number of awfm hits, "
         "in parts per million, before a hit is considered to be repetitive junk");
     searchCommand.add_argument("-T", "--searchType").required().help("search type to perform. \n"
@@ -145,8 +165,17 @@ int main(int argc, char** argv) {
         "'d' or 'b'. for dual-strand nucleotide search (not to be used with amino acid)\n"
         "'c' for complement strand only (not to be used with amino acid)");
 
+
+    argparse::ArgumentParser scoreCommand("score");
+    scoreCommand.add_description("finds the maximum score required to find up to a certain percentage of true positive hits.");
+    scoreCommand.add_argument("-p", "--percent").required().help("percent, between 0.0 and 1.0, of true positive hits necessary.");
+    scoreCommand.add_argument("-f", "--fasta").required().help("fasta file src");
+    scoreCommand.add_argument("-h", "--hmmSrc").required().help("hmm file src");
+    scoreCommand.add_argument("-l", "--kmerLength").required().help("length of kmer to check.");
+
     parser.add_subparser(createCommand);
     parser.add_subparser(searchCommand);
+    parser.add_subparser(scoreCommand);
 
     try {
         parser.parse_args(argc, argv);
@@ -172,14 +201,14 @@ int main(int argc, char** argv) {
         std::cout << "fm index creation finished" << std::endl;
     }
     else if (parser.is_subcommand_used(searchCommand)) {
-        std::string fastaSrc, awfmSrc, hmmSrc, posListSrc;
+        std::string fastaSrc, awfmSrc, hmmSrc, posListSrc, sortedHitsFileSrc;
         NailForge::SearchParams params;
         NailForge::SearchType searchType;
         uint8_t numThreads;
         NailForge::Alphabet searchAlphabet;
 
         parseSearchOptions(searchCommand, fastaSrc, awfmSrc, hmmSrc, posListSrc, params, searchType,
-            numThreads, searchAlphabet);
+            numThreads, searchAlphabet, sortedHitsFileSrc);
 
         std::vector<std::vector<NailForge::AlignmentSeed>> primarySeedList, complementSeedList;
 
@@ -196,21 +225,23 @@ int main(int argc, char** argv) {
 
 
         std::cout << "done writing" << std::endl;
-        if (searchAlphabet == NailForge::Alphabet::Amino) {
-            checkAminoSensitivity(primarySeedList, hmmSrc, fastaSrc, posListSrc);
-        }
-        else {
-            checkDnaSensitivity(primarySeedList, complementSeedList, posListSrc, hmmSrc, fastaSrc);
-        }
-
+        // checkSensitivity(primarySeedList, hmmSrc, fastaSrc, posListSrc);
 
         std::cout << "\ttime (search): \t" << searchTimeDuration << "\t time(full)\t" << fullRuntimeDurationSeconds << std::endl;
-        
-        std::cout << "writing hits to file" << std::endl;
-        writeHitsToFile(primarySeedList, complementSeedList, fastaSrc, hmmSrc, "benchmarkHits.txt");
-        writeAminoScoreList(primarySeedList, fastaSrc, hmmSrc);
-        writeResultsToFile(primarySeedList, complementSeedList, hmmSrc, fastaSrc);
 
+        std::cout << "writing hits to file" << std::endl;
+
+        // writeHitsToFile(primarySeedList, complementSeedList, fastaSrc, hmmSrc, sortedHitsFileSrc + "hits");
+        // sortNailForgeHits(primarySeedList, fastaSrc, hmmSrc, sortedHitsFileSrc);
+
+
+
+        //// writeAminoScoreList(primarySeedList, fastaSrc, hmmSrc);
+        //// writeResultsToFile(primarySeedList, complementSeedList, hmmSrc, fastaSrc);
+
+    }
+    else if (parser.is_subcommand_used(scoreCommand)) {
+        findKmerScoreThreshold(scoreCommand);
     }
     else {
         std::cout << "no command given, please specify createfm or search" << std::endl;
@@ -269,7 +300,14 @@ void parseCreateOptions(argparse::ArgumentParser& parser, std::string& fastaSrc,
 
 void parseSearchOptions(argparse::ArgumentParser& parser, std::string& fastaSrc, std::string& awfmiSrc, std::string& hmmSrc,
     std::string& posListSrc, NailForge::SearchParams& params, NailForge::SearchType& searchType, uint8_t& numThreads,
-    NailForge::Alphabet& searchAlphabet) {
+    NailForge::Alphabet& searchAlphabet, std::string& sortedHitsFileSrc) {
+    try {
+        sortedHitsFileSrc = parser.get<std::string>("-S");
+    }
+    catch (const std::exception& e) {
+        sortedHitsFileSrc = "";
+        //nothing wrong if this is mission
+    }
     try {
         fastaSrc = parser.get<std::string>("-f");
     }
@@ -422,7 +460,7 @@ bool isAminoNegativeExample(const FastaVector* fastaVector, const uint32_t seque
     return strncmp("decoy", headerPtr, nameLen) == 0;
 }
 
-void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+void checkSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
     const std::string& hmmFileSrc, const std::string& fastaFileSrc, const std::string& posListSrc) {
     uint64_t numSeeds = 0;
     for (const auto& list : primarySeedList) {
@@ -453,10 +491,13 @@ void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSee
     uint64_t numTruePositives = 0;
     uint64_t numFalsePositives = 0;
 
-    //find the number of negative examples
+    //find the number of positive and negative examples
     for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
         if (isAminoNegativeExample(&fastaVector, sequenceIdx)) {
             numNegativeExamples += phmmList.count;
+        }
+        else {
+            numPositiveExamples++;
         }
     }
 
@@ -473,42 +514,45 @@ void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSee
     //find the positive examples and true positives
     std::string line;
 
-    std::ifstream positionListFile(posListSrc);
-    while (std::getline(positionListFile, line)) {
-        if (line[0] != '#') {
-            numPositiveExamples++;
-            size_t stringPosition = line.find('/');
-            stringPosition++;
-            stringPosition = line.find('/', stringPosition);
-            const std::string sequenceName = line.substr(0, stringPosition + 1);
 
-            for (uint32_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
-                char* modelName = phmmList.phmms[modelIdx].header.name;
+    for (uint64_t modelIdx = 0; modelIdx < phmmList.count; modelIdx++) {
+        std::vector<bool> hasSeenSequence;
+        hasSeenSequence.resize(fastaVector.metadata.capacity);
+        for (uint64_t i = 0; i < hasSeenSequence.size(); i++) {
+            hasSeenSequence[i] = false;
+        }
 
-                if (sequenceName.find(std::string(modelName)) != 0) {
-                    continue;
+        const auto modelSeedList = primarySeedList[modelIdx];
+        char* modelName = phmmList.phmms[modelIdx].header.name;
+
+        //remove the training prefix if found
+        if (starts_with(modelName, "TRAIN.")) {
+            modelName = modelName + std::strlen("TRAIN.");
+        }
+
+        for (const auto& seed : modelSeedList) {
+            hasSeenSequence[seed.sequenceIdx] = true;
+        }
+
+        for (uint64_t seqIdx = 0; seqIdx < fastaVector.metadata.capacity; seqIdx++) {
+            if (hasSeenSequence[seqIdx]) {
+                char* seqName;
+                uint64_t seqNameLen;
+                fastaVectorGetHeader(&fastaVector, seqIdx, &seqName, &seqNameLen);
+                //get until the first forward slash
+                std::string seqNameString(seqName);
+                seqNameString = seqNameString.substr(0, seqNameString.find('/'));
+
+                if (std::string(modelName).compare(seqNameString) == 0) {
+                    numTruePositives++;
                 }
-
-                //find the index of the matching sequence
-                for (uint32_t sequenceIdx = 0; sequenceIdx < fastaVector.metadata.count;sequenceIdx++) {
-                    char* seqHeader;
-                    size_t seqHeaderLen;
-                    fastaVectorGetHeader(&fastaVector, sequenceIdx, &seqHeader, &seqHeaderLen);
-                    if (std::string(seqHeader).find(sequenceName) != std::string::npos) {
-                        for (const NailForge::AlignmentSeed& primarySeed : primarySeedList[modelIdx]) {
-                            if (primarySeed.sequenceIdx == sequenceIdx) {
-                                numTruePositives++;
-                                break;
-                            }
-                        }
-                        break;
-                    }
-
+                else if (starts_with(seqNameString, "decoy")) {
+                    numFalsePositives++;
                 }
-                break;//we've identified the model, we can skip the rest
             }
         }
     }
+
     if (numPositiveExamples == 0) {
         std::cout << "error, num pos examples was zero" << std::endl;
     }
@@ -516,6 +560,7 @@ void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSee
     size_t numPrimarySeeds = 0;
     for (const auto& primaryHit : primarySeedList) {
         numPrimarySeeds += primaryHit.size();
+
     }
     const double primaryTruePositiveRate = static_cast<double>(numTruePositives) / static_cast<double>(numPositiveExamples);
     const double primaryFalsePositiveRate = static_cast<double>(numFalsePositives) / static_cast<double>(numNegativeExamples);
@@ -527,7 +572,7 @@ void checkAminoSensitivity(const std::vector<std::vector<NailForge::AlignmentSee
     p7HmmListDealloc(&phmmList);
 }
 
-void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+void checkSensitivityWithPosFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
     const std::vector<std::vector<NailForge::AlignmentSeed>>& complementSeedList, const std::string& posListSrc,
     const std::string& hmmFileSrc, const std::string& fastaFileSrc) {
 
@@ -587,7 +632,7 @@ void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>
                 uint64_t seqNameLen;
                 fastaVectorGetHeader(&fastaVector, nailHit.sequenceIdx, &seqName, &seqNameLen);
                 bool sequencesMatch = std::strcmp(seqName, position.sequenceName.c_str()) == 0;
-                bool hasOverlap = std::max((int64_t)position.positionFrom, std::max((int64_t)nailHit.sequencePosition-128,(int64_t)0 )) <=
+                bool hasOverlap = std::max((int64_t)position.positionFrom, std::max((int64_t)nailHit.sequencePosition - 128, (int64_t)0)) <=
                     std::min((int64_t)position.positionTo, (int64_t)nailHit.sequencePosition + 128);
 
                 // nailHit.sequencePosition >= position.positionFrom && nailHit.sequencePosition <= position.positionTo;
@@ -598,14 +643,14 @@ void checkDnaSensitivity(const std::vector<std::vector<NailForge::AlignmentSeed>
                     break;
                 }
             }
-            if(!foundPosition){
+            if (!foundPosition) {
                 numPosNotFound++;
-                std::cout << "couldn't find position :"<< position.sequenceName<<"\t"<<position.modelName<<"\t"<< position.positionFrom << "\t"<<position.positionTo<< "\t"<<position.isReverseComplement << std::endl; 
+                std::cout << "couldn't find position :" << position.sequenceName << "\t" << position.modelName << "\t" << position.positionFrom << "\t" << position.positionTo << "\t" << position.isReverseComplement << std::endl;
             }
 
         }
     }
-    std::cout << "couldn't find "<< numPosNotFound<<" positions"<<std::endl;
+    std::cout << "couldn't find " << numPosNotFound << " positions" << std::endl;
 
     //complementStrand count true positives
     for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
@@ -740,12 +785,12 @@ unique_ptr<vector<vector<PositionListEntry>>> getDnaPositionList(const std::stri
             char* seqHeader;
             fastaVectorGetHeader(&fastaVector, seqIdx, &seqHeader, &seqHeaderLen);
 
-            if (std::string(seqHeader).starts_with(sequenceName)) {
+            if (starts_with(seqHeader, sequenceName)) {
 
                 //find the model idx
                 bool foundMatch = false;
                 for (uint32_t modelIdx = 0; modelIdx < phmmList.count;modelIdx++) {
-                    if (std::string(phmmList.phmms[modelIdx].header.name).ends_with(modelName)) {
+                    if (ends_with(phmmList.phmms[modelIdx].header.name, modelName)) {
                         foundMatch = true;
                         std::string seqNameCopy = sequenceName;
                         (*entryList)[modelIdx].emplace_back(modelName, seqNameCopy, positionFrom, positionTo);
@@ -882,26 +927,33 @@ void writeHitsToFile(const std::vector<std::vector<NailForge::AlignmentSeed>>& p
 
     for (uint32_t modelIdx = 0; modelIdx < primarySeedList.size(); modelIdx++) {
         char* modelName = phmmList.phmms[modelIdx].header.name;
+
+        //remove the training prefix if found
+        if (starts_with(modelName, "TRAIN.")) {
+            modelName = modelName + std::strlen("TRAIN.");
+        }
+
         char* seqName;
         size_t seqNameLen;
         for (const auto& primarySeed : primarySeedList[modelIdx]) {
             fastaVectorGetHeader(&fastaVector, primarySeed.sequenceIdx, &seqName, &seqNameLen);
 
             std::string stringSeqName = std::string(seqName);
-            const auto firstSpaceIdx = stringSeqName.find(" ");
-            std::string shortenedSeqName = stringSeqName.substr(0, firstSpaceIdx);
+            std::string shortenedSeqName = stringSeqName.substr(0, stringSeqName.find('/'));
 
-            outputStream << "!!!\t" << shortenedSeqName << "\t" << "TRAIN." << modelName << "\t" <<
-                primarySeed.sequencePosition << "\t" << primarySeed.sequencePosition + 10 << "\n";
+            if (shortenedSeqName.compare(modelName) == 0) {
+                outputStream << seqName << "\t" << modelName << "\t" <<
+                    primarySeed.sequencePosition << "\t" << primarySeed.sequencePosition + 10 << "\n";
+            }
         }
-        for (const auto& complementSeed : complementSeedList[modelIdx]) {
-            fastaVectorGetHeader(&fastaVector, complementSeed.sequenceIdx, &seqName, &seqNameLen);
-            std::string stringSeqName = std::string(seqName);
-            const auto firstSpaceIdx = stringSeqName.find(" ");
-            std::string shortenedSeqName = stringSeqName.substr(0, firstSpaceIdx);
-            outputStream << "!!!\t" << shortenedSeqName << "\t" << "TRAIN." << modelName << "\t" <<
-                complementSeed.sequencePosition + 10 << "\t" << complementSeed.sequencePosition << "\n";
-        }
+        // for (const auto& complementSeed : complementSeedList[modelIdx]) {
+        //     fastaVectorGetHeader(&fastaVector, complementSeed.sequenceIdx, &seqName, &seqNameLen);
+        //     std::string stringSeqName = std::string(seqName);
+        //     const auto firstSpaceIdx = stringSeqName.find(" ");
+        //     std::string shortenedSeqName = stringSeqName.substr(0, firstSpaceIdx);
+        //     outputStream << "!!!\t" << shortenedSeqName << "\t" << "TRAIN." << modelName << "\t" <<
+        //         complementSeed.sequencePosition + 10 << "\t" << complementSeed.sequencePosition << "\n";
+        // }
     }
     outputStream.close();
 
@@ -958,11 +1010,11 @@ void writeAminoScoreList(std::vector<std::vector<NailForge::AlignmentSeed>>& see
             float score = seed.fullScore;
             bool isTP = false;
             bool isFP = false;
-            if (std::string(seqName).starts_with(seedModelName) && !weveSeenAHitInThisSequence) {
+            if (starts_with(seqName, seedModelName) && !weveSeenAHitInThisSequence) {
                 sequenceHasBeenSeenList[seed.sequenceIdx] = true;
                 isTP = true;
             }
-            else if (std::string(seqName).starts_with("decoy")) {
+            else if (starts_with(seqName, "decoy")) {
                 isFP = true;
             }
             scoreEntryList.emplace_back(score, isTP, isFP);
@@ -998,4 +1050,194 @@ void writeAminoScoreList(std::vector<std::vector<NailForge::AlignmentSeed>>& see
 
     fastaVectorDealloc(&fastaVector);
     p7HmmListDealloc(&phmmList);
+}
+
+
+float getMaximalScoreForKmerLength(const FastaVector& fastaVector, const uint64_t seqIdx, const P7Hmm& phmm, const uint8_t kmerLength) {
+    const std::vector<float> matchScores = NailForge::PhmmProcessor::toFloatMatchScores(phmm);
+    const bool isAmino = phmm.header.alphabet == P7HmmReaderAlphabetAmino;
+    char* sequence;
+    size_t seqLen;
+    auto alphabetCardinality = isAmino ? 20 : 4;
+    fastaVectorGetSequence(&fastaVector, seqIdx, &sequence, &seqLen);
+    float maxKmerScore = 0.0f;
+
+    for (int64_t sequencePosition = 0; sequencePosition < ((int64_t)seqLen - (int64_t)kmerLength); sequencePosition++) {
+        for (int64_t modelPosition = 0; modelPosition < ((int64_t)phmm.header.modelLength - (int64_t)kmerLength); modelPosition++) {
+            float kmerScore = 0.0f;
+            float thisKmerMaxScore = 0.0f;
+            for (uint32_t kmerPosition = 0; kmerPosition < kmerLength; kmerPosition++) {
+                char symbol = sequence[sequencePosition + kmerPosition];
+                const uint8_t letterIndex = NailForge::LetterConversion::asciiLetterToLetterIndex(symbol,
+                    isAmino ? NailForge::Alphabet::Amino : NailForge::Alphabet::Dna);
+                float matchScore = matchScores[((modelPosition + kmerPosition) * alphabetCardinality) + letterIndex];
+                kmerScore += matchScore;
+                thisKmerMaxScore = std::max(thisKmerMaxScore, kmerScore);
+            }
+            maxKmerScore = std::max(maxKmerScore, thisKmerMaxScore);
+        }
+    }
+    return maxKmerScore;
+}
+
+void findKmerScoreThreshold(argparse::ArgumentParser& parser) {
+
+    const std::string fastaSrc = parser.get<std::string>("-f");
+    const std::string hmmSrc = parser.get<std::string>("-h");
+    const std::string percentString = parser.get<std::string>("-p");
+    const float percentFloat = std::stof(percentString);
+    const std::string kmerLengthString = parser.get<std::string>("-l");
+    const uint8_t kmerLength = std::stoi(kmerLengthString.c_str());
+
+    std::vector<float> maximalScores;
+
+
+    FastaVector fastaVector;
+    P7HmmList phmmList;
+    fastaVectorInit(&fastaVector);
+    fastaVectorReadFasta(fastaSrc.c_str(), &fastaVector);
+    readP7Hmm(hmmSrc.c_str(), &phmmList);
+    const uint64_t numSequence = fastaVector.metadata.count;
+    const uint64_t numModels = phmmList.count;
+
+    for (uint64_t seqIdx = 0; seqIdx < numSequence; seqIdx++) {
+        char* header;
+        uint64_t headerLen;
+        fastaVectorGetHeader(&fastaVector, seqIdx, &header, &headerLen);
+        std::string headerString = std::string(header, headerLen);
+
+        if (headerString.find("decoy") == std::string::npos) {
+
+            std::string seqName;
+            std::istringstream seqNameStream(headerString);
+            std::getline(seqNameStream, seqName, '/');
+
+            for (uint64_t modelIdx = 0; modelIdx < numModels; modelIdx++) {
+                std::string fullModelName = phmmList.phmms[modelIdx].header.name;
+                std::string modelName;
+
+                std::istringstream modelNameStream(fullModelName);
+                std::getline(modelNameStream, modelName, '.');
+                std::getline(modelNameStream, modelName, '.');
+
+                //if the model and sequence match...
+                if (seqName == modelName) {
+                    maximalScores.push_back(getMaximalScoreForKmerLength(fastaVector, seqIdx, phmmList.phmms[modelIdx], kmerLength));
+                }
+            }
+        }
+    }
+    std::sort(maximalScores.begin(), maximalScores.end(), [](const float& f1, const float& f2) {return f2 < f1;});
+
+    uint64_t thresholdScoreIdx = std::ceil(maximalScores.size() * percentFloat);
+    // std::cout << "numseq " << numSequence << ", nummodels " << phmmList.count << std::endl;
+    // std::cout << "len " << maximalScores.size() << ", idx " << thresholdScoreIdx << std::endl;
+    std::cout << maximalScores[thresholdScoreIdx] << std::endl;
+    // std::cout << *std::min_element(maximalScores.begin(), maximalScores.end()) << std::endl;
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);
+
+}
+
+
+struct FinishedSeed {
+    FinishedSeed() {}
+    FinishedSeed(const float score, const size_t seqIdx, const size_t hmmIdx, const size_t seqPos, const size_t hmmPos) :
+        score(score), seqIdx(seqIdx), hmmIdx(hmmIdx), seqPos(seqPos), hmmPos(hmmPos) {}
+    FinishedSeed(const NailForge::AlignmentSeed& alignmentSeed, const size_t hmmIdx) {
+        this->score = alignmentSeed.fullScore;
+        this->seqIdx = alignmentSeed.sequenceIdx;
+        this->hmmIdx = hmmIdx;
+        this->seqPos = alignmentSeed.sequencePosition;
+        this->hmmPos = alignmentSeed.modelPosition;
+    }
+    float score;
+    size_t seqIdx;
+    size_t hmmIdx;
+    size_t seqPos;
+    size_t hmmPos;
+};
+
+
+void sortNailForgeHits(const std::vector<std::vector<NailForge::AlignmentSeed>>& primarySeedList,
+    const std::string& fastaSrc, const std::string& hmmSrc, const std::string& sortedHitsFileSrc) {
+
+
+    FastaVector fastaVector;
+    P7HmmList phmmList;
+    fastaVectorInit(&fastaVector);
+    fastaVectorReadFasta(fastaSrc.c_str(), &fastaVector);
+    readP7Hmm(hmmSrc.c_str(), &phmmList);
+    const uint64_t numSequence = fastaVector.metadata.count;
+    const uint64_t numModels = phmmList.count;
+
+    std::map<std::tuple<size_t, size_t>, FinishedSeed> scoreMap;
+    for (size_t hmmIdx = 0; hmmIdx < primarySeedList.size(); hmmIdx++) {
+        for (const auto& seed : primarySeedList[hmmIdx]) {
+            const auto& locationTuple = std::tuple<size_t, size_t>(hmmIdx, seed.sequenceIdx);
+            if (scoreMap.find(locationTuple) == scoreMap.end()) {
+                scoreMap[locationTuple] = FinishedSeed(seed, hmmIdx);
+            }
+            else {
+                if (scoreMap[locationTuple].score > seed.fullScore) {
+                    scoreMap[locationTuple] = FinishedSeed(seed, hmmIdx);
+                }
+            }
+        }
+    }
+
+
+    std::vector<FinishedSeed> finishedSeeds;
+    for (size_t hmmIdx = 0; hmmIdx < numModels; hmmIdx++) {
+        for (size_t seqIdx = 0; seqIdx < numSequence; seqIdx++) {
+            const std::tuple<size_t, size_t> locationTuple(hmmIdx, seqIdx);
+            if (scoreMap.find(locationTuple) != scoreMap.end()) {
+                finishedSeeds.push_back(scoreMap[locationTuple]);
+            }
+        }
+    }
+
+    //sort by score
+    std::sort(finishedSeeds.begin(), finishedSeeds.end(), [](const auto& lhs, const auto& rhs) {return lhs.score < rhs.score;});
+
+    std::ofstream hitsStream;
+    size_t numTps = 0;
+    size_t numFps = 0;
+    float lastScore = 0;
+    hitsStream.open(sortedHitsFileSrc);
+    hitsStream << "0\t0\t0" << std::endl;
+    for (const auto& score : finishedSeeds) {
+        std::string rawHmmName = phmmList.phmms[score.hmmIdx].header.name;
+        std::string hmmName, seqName;
+        if (starts_with(rawHmmName, "TRAIN")) {
+            hmmName = rawHmmName.substr(7);//remove the "TRAIN."
+        }
+        else {
+            hmmName = rawHmmName;
+        }
+
+        char* rawSeqName;
+        size_t rawSeqLen;
+        fastaVectorGetHeader(&fastaVector, score.seqIdx, &rawSeqName, &rawSeqLen);
+
+        std::string rawSeqNameString(rawSeqName, rawSeqLen);
+        seqName = rawSeqNameString.substr(0, rawSeqNameString.find('/'));
+
+        const bool isTruePositive = seqName == hmmName;
+        const bool isFalsePositive = starts_with(seqName, "decoy");
+        if (isTruePositive) {
+            numTps++;
+            hitsStream << numTps << "\t" << numFps << "\t" << score.score << std::endl;
+        }
+        if (isFalsePositive) {
+            numFps++;
+        }
+        lastScore = score.score;
+    }
+    hitsStream << numTps << "\t" << numFps << "\t" << lastScore << std::endl;
+    hitsStream.close();
+
+    fastaVectorDealloc(&fastaVector);
+    p7HmmListDealloc(&phmmList);    
 }
